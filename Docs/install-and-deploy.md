@@ -848,6 +848,31 @@ If you genuinely must:
    a time, verifying between.
 4. Deploy the matching older Brain **before** starting anything.
 
+#### One named hazard: rolling back past `sender_0024` re-wedges account deletion
+
+`sender_0024`'s down migration **deliberately restores `sender_0008`'s unconditional append-only
+trigger body** (ADR-0012). That is correct as a down migration — it reverses what the up did — but the
+thing it reverses is a *bug fix*, not a feature, and reversing it re-opens the bug:
+
+> With `sender_0024` reverted, `DELETE /v1/admin/accounts/{id}` returns **HTTP 500** for any account
+> that has ever been assigned a job. Postgres implements the `job_events.account_id` `ON DELETE SET
+> NULL` as an internal `UPDATE`, the unconditional trigger rejects it, and the parent `DELETE` aborts.
+> That was the live behavior from Phase 1 through Phase 10.
+
+Two properties make this worth naming rather than leaving to be rediscovered:
+
+- **It does not present as a migration problem.** The `down` succeeds cleanly and `migrate status`
+  looks healthy. The symptom appears later, on an unrelated operator action, as a 500 whose internal
+  reason is an append-only violation. Nothing links it back to the rollback.
+- **Rows already nulled stay nulled.** The down cannot restore the `account_id` values the carve-out
+  permitted to be set to NULL. So the rollback is not a clean reversal of observable state — only of
+  the trigger body.
+
+**Rule:** rolling back below `0024` means accepting that account deletion is broken until you roll
+forward again. Deletion is the mechanism behind any retention or erasure obligation, so treat `0024`
+as a floor and prefer a forward fix. This is the general case of why `down` is gated at all: on an
+additive-only chain, forward is the tested direction.
+
 ---
 
 ## Part 6 — Version skew during a rolling deploy

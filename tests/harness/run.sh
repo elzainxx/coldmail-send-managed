@@ -101,6 +101,17 @@ go_suite tools/send-managed-migrate "migration lifecycle + contiguity guard (app
 # AAD, T5 role-denied-platform-write, T5b job_item_id UNIQUE, T6 append-only job_events). All
 # run against real Postgres clones.
 go_suite tests/harness "DB isolation + Phase 1 data model (claim/events/RLS/crypto/append-only)"
+# The ROOT mux's own routing (item 7b's third surface). Listed HERE, before any template is built,
+# because it is the one Go suite in this file that needs NO infrastructure: it drives the real
+# NewHealthServer wiring in-process with nil db/guard, since what it asserts is what that
+# constructor REGISTERS, not what any handler then does.
+#
+# It is listed at all because it was missed once: internal/httpapi's first-ever test file landed
+# with item 7b (e3fee99) and nothing ran it. This script names each package explicitly (never
+# `go test ./...`), so a new test package is invisible to the harness AND to CI — which runs only
+# gofmt + vet over ./... and this script — until a line is added here. A written test that nothing
+# executes is worse than no test: it reports coverage it does not provide.
+go_suite services/control/internal/httpapi "root-mux coded 404 + unmounted-surface fallback + log-forgery neutralization (item 7b)"
 
 # --- Phase 2 admin API behavioral suite (real Server over httptest against real PG clones) -----
 # These tests live in the control module (internal/adminapi) and drive the ACTUAL admin handlers

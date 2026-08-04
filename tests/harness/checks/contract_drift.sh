@@ -227,21 +227,38 @@ if [[ -n "$PLATFORM_TOKEN_VALUE" ]]; then
     echo "contract_drift FAIL: GET /v1/describe returned nothing with the dev platform token"; fail=1
   else
     VOC_SRC="services/control/internal/platformapi/describe_vocabularies.go"
+    # desc_fail records whether any assertion IN THIS BLOCK fired, so the summary at the bottom
+    # cannot claim the equalities it names while one of them was just reported unequal.
+    #
+    # Found on module 3, whose copy of this block printed `7 error codes (== codeStatus)` in the same
+    # output as its own `FAIL: describe publishes 7 error codes, codeStatus declares 8` — a summary
+    # asserting the equality it had just reported unequal. This file's line had the identical defect;
+    # nothing had made it print yet because this module's describe happened to be consistent.
+    #
+    # WHY A BLOCK-LOCAL FLAG AND NOT `desc_fail_baseline="$fail"`. That was tried on module 3 and it
+    # does NOT work: `fail` is a 0/1 LATCH, not a counter. Every site in this file assigns `fail=1`,
+    # so once any earlier check has fired the baseline is already 1 and
+    # `[[ "$fail" -eq "$desc_fail_baseline" ]]` is 1 -eq 1 for the rest of the run. Verified by
+    # running it — the misleading line printed again, unchanged. Any guard of that shape anywhere in
+    # this file is jammed the same way. The cost is that a NEW assertion added below must remember to
+    # set desc_fail too; the wv_bad/c404_bad recorders above exist to make that automatic, and a
+    # future assertion here should go through one like them rather than assigning both flags by hand.
+    desc_fail=0
 
     # error_codes[] vs platformapi's codeStatus map. The map is what writeError resolves a status
     # from, so its entry count is the number of codes this module can emit.
     want_codes="$(grep -cE '^\s+code[A-Za-z]+:\s+http\.Status' services/control/internal/platformapi/errors.go || true)"
     got_codes="$(grep -oE '"code":"[a-z_]+","http_status":[0-9]+' <<<"$desc" | wc -l | tr -d ' ' || true)"
     want_codes="${want_codes:-0}"; got_codes="${got_codes:-0}"
-    [[ "$want_codes" -gt 0 ]] || { echo "contract_drift FAIL: read 0 codeStatus entries from errors.go — this check would be vacuous"; fail=1; }
+    [[ "$want_codes" -gt 0 ]] || { echo "contract_drift FAIL: read 0 codeStatus entries from errors.go — this check would be vacuous"; fail=1; desc_fail=1; }
     if [[ "$got_codes" != "$want_codes" ]]; then
-      echo "contract_drift FAIL: describe publishes $got_codes error codes, codeStatus declares $want_codes"; fail=1
+      echo "contract_drift FAIL: describe publishes $got_codes error codes, codeStatus declares $want_codes"; fail=1; desc_fail=1
     fi
     # The fixed MESSAGE must never be published (two-vocabulary rule): a client must branch on the
     # code, never on operator-facing English. Go marshals map keys alphabetically, so a leaked
     # message would sit immediately after http_status.
     if grep -qE '"code":"[a-z_]+","http_status":[0-9]+,"message"' <<<"$desc"; then
-      echo "contract_drift FAIL: describe's error_codes[] publishes a message — clients would match on message text"; fail=1
+      echo "contract_drift FAIL: describe's error_codes[] publishes a message — clients would match on message text"; fail=1; desc_fail=1
     fi
     # Doc lockstep, one direction only: the api-contract error table is the UNION across domains (it
     # also carries adminapi's config_ordering_violation and the reserved forbidden/unprocessable/
@@ -249,8 +266,26 @@ if [[ -n "$PLATFORM_TOKEN_VALUE" ]]; then
     # must be documented.
     while read -r c; do
       [[ -n "$c" ]] || continue
-      grep -q "| \`$c\` |" Docs/api-contract.md || { echo "contract_drift FAIL: describe publishes error code $c but api-contract.md's error table does not list it"; fail=1; }
+      grep -q "| \`$c\` |" Docs/api-contract.md || { echo "contract_drift FAIL: describe publishes error code $c but api-contract.md's error table does not list it"; fail=1; desc_fail=1; }
     done < <(grep -oE '"code":"[a-z_]+","http_status"' <<<"$desc" | sed -E 's/"code":"([a-z_]+)".*/\1/' || true)
+
+    # ...and the COUNT WORD the api-contract's error_codes[] paragraph spells out ("This surface emits
+    # **six**"). The loop above only catches a code missing from the union TABLE; the prose count is a
+    # separate literal, and that paragraph promises the number is DERIVED from codeStatus, so the gate
+    # has to be what makes the promise true. It went stale on module 3 for exactly this reason (it read
+    # "seven" while codeStatus held eight, because item 7b added method_not_allowed), and this module's
+    # own count moved five -> six in the same item with nothing enforcing it. Word, not digit: the doc
+    # spells these out.
+    doc_codes="$(grep -oE 'This surface emits \*\*[a-z]+\*\*' Docs/api-contract.md | head -1 | sed -E 's/.*\*\*([a-z]+)\*\*/\1/' || true)"
+    case "${doc_codes:-}" in
+      five) doc_n=5 ;; six) doc_n=6 ;; seven) doc_n=7 ;; eight) doc_n=8 ;; nine) doc_n=9 ;; ten) doc_n=10 ;;
+      *) doc_n="" ;;
+    esac
+    if [[ -z "$doc_n" ]]; then
+      echo "contract_drift FAIL: could not read the 'This surface emits **<word>**' count from Docs/api-contract.md (got '${doc_codes:-}') — this check would be vacuous"; fail=1; desc_fail=1
+    elif [[ "$doc_n" != "$want_codes" ]]; then
+      echo "contract_drift FAIL: api-contract.md says the platform surface emits $doc_codes ($doc_n) error codes, codeStatus declares $want_codes"; fail=1; desc_fail=1
+    fi
 
     # vocabularies{} vs its declaration source: one served entry per exposedDBEnums entry (source
     # db_enum) and per staticVocabularies entry (source module_constant).
@@ -260,9 +295,9 @@ if [[ -n "$PLATFORM_TOKEN_VALUE" ]]; then
     got_static="$(grep -oE '"source":"module_constant"' <<<"$desc" | wc -l | tr -d ' ' || true)"
     want_db="${want_db:-0}"; want_static="${want_static:-0}"
     got_db="${got_db:-0}"; got_static="${got_static:-0}"
-    [[ "$want_db" -gt 0 && "$want_static" -gt 0 ]] || { echo "contract_drift FAIL: read $want_db/$want_static vocabulary declarations from $VOC_SRC — the greps are broken and this check would be vacuous"; fail=1; }
-    [[ "$got_db" == "$want_db" ]] || { echo "contract_drift FAIL: describe publishes $got_db db_enum vocabularies, exposedDBEnums declares $want_db"; fail=1; }
-    [[ "$got_static" == "$want_static" ]] || { echo "contract_drift FAIL: describe publishes $got_static module_constant vocabularies, staticVocabularies declares $want_static"; fail=1; }
+    [[ "$want_db" -gt 0 && "$want_static" -gt 0 ]] || { echo "contract_drift FAIL: read $want_db/$want_static vocabulary declarations from $VOC_SRC — the greps are broken and this check would be vacuous"; fail=1; desc_fail=1; }
+    [[ "$got_db" == "$want_db" ]] || { echo "contract_drift FAIL: describe publishes $got_db db_enum vocabularies, exposedDBEnums declares $want_db"; fail=1; desc_fail=1; }
+    [[ "$got_static" == "$want_static" ]] || { echo "contract_drift FAIL: describe publishes $got_static module_constant vocabularies, staticVocabularies declares $want_static"; fail=1; desc_fail=1; }
     # Both loops below match a published vocabulary entry with `"<name>":\{[^{}]*"source"` rather than
     # a fixed key ORDER. encoding/json marshals map keys ALPHABETICALLY, so an entry serializes as
     # {"fields":...,"source":...,"values":...} — a `"<name>":{"source"` pattern would never match, and
@@ -275,7 +310,7 @@ if [[ -n "$PLATFORM_TOKEN_VALUE" ]]; then
     # twice and another dropped.
     while read -r t; do
       [[ -n "$t" ]] || continue
-      grep -qE "\"$t\":\{[^{}]*\"source\":\"db_enum\"" <<<"$desc" || { echo "contract_drift FAIL: exposedDBEnums declares $t but describe does not publish it as a db_enum vocabulary"; fail=1; }
+      grep -qE "\"$t\":\{[^{}]*\"source\":\"db_enum\"" <<<"$desc" || { echo "contract_drift FAIL: exposedDBEnums declares $t but describe does not publish it as a db_enum vocabulary"; fail=1; desc_fail=1; }
     done < <(grep -oE '^\s+\{Type: "[a-z_]+"' "$VOC_SRC" | sed -E 's/.*"([a-z_]+)".*/\1/' || true)
     # The DELIBERATELY excluded types must be absent, so the exclusion is enforced on the wire and not
     # merely asserted in Go. FIVE of this module's seven enums are excluded, so this loop carries more
@@ -286,17 +321,17 @@ if [[ -n "$PLATFORM_TOKEN_VALUE" ]]; then
       # of the loop body, so its exit 1 becomes the loop's status and set -e would kill the gate on the
       # HEALTHY path (the excluded type correctly absent) — the inverted-guard trap.
       if grep -qE "\"$t\":\{[^{}]*\"source\"" <<<"$desc"; then
-        echo "contract_drift FAIL: $t is declared NOT exposed but describe publishes it"; fail=1
+        echo "contract_drift FAIL: $t is declared NOT exposed but describe publishes it"; fail=1; desc_fail=1
       fi
     done < <(grep -oE '^\s+"[a-z_]+": "' "$VOC_SRC" | sed -E 's/.*"([a-z_]+)".*/\1/' || true)
 
     # pricing.models[] (item 6): the declared set must be served, and pricing.model must be a member.
-    grep -q '"models":\[' <<<"$desc" || { echo "contract_drift FAIL: describe does not publish pricing.models[] (fix-plan item 6)"; fail=1; }
+    grep -q '"models":\[' <<<"$desc" || { echo "contract_drift FAIL: describe does not publish pricing.models[] (fix-plan item 6)"; fail=1; desc_fail=1; }
     served_model="$(grep -oE '"model":"[a-z_]+"' <<<"$desc" | head -1 | sed -E 's/.*"([a-z_]+)"$/\1/' || true)"
     if [[ -n "$served_model" ]]; then
-      grep -qE "\"models\":\[[^]]*\"$served_model\"" <<<"$desc" || { echo "contract_drift FAIL: pricing.model=$served_model is not a member of the published models[]"; fail=1; }
+      grep -qE "\"models\":\[[^]]*\"$served_model\"" <<<"$desc" || { echo "contract_drift FAIL: pricing.model=$served_model is not a member of the published models[]"; fail=1; desc_fail=1; }
     else
-      echo "contract_drift FAIL: describe publishes no pricing.model"; fail=1
+      echo "contract_drift FAIL: describe publishes no pricing.model"; fail=1; desc_fail=1
     fi
     # The tier axis IS the pool_kind axis (see $VOC_SRC on why pool_kind is declared db_enum even
     # though describeTiers writes the ids as Go literals), so every advertised tier id must be one of
@@ -305,18 +340,22 @@ if [[ -n "$PLATFORM_TOKEN_VALUE" ]]; then
     # whose binary predates a pool_kind addition.
     pool_vals="$(grep -oE '"pool_kind":\{[^{}]*\}' <<<"$desc" || true)"
     if [[ -z "$pool_vals" ]]; then
-      echo "contract_drift FAIL: describe publishes no pool_kind vocabulary — the tier ids have nothing to be checked against"; fail=1
+      echo "contract_drift FAIL: describe publishes no pool_kind vocabulary — the tier ids have nothing to be checked against"; fail=1; desc_fail=1
     else
       tier_n=0
       while read -r id; do
         [[ -n "$id" ]] || continue
         tier_n=$((tier_n + 1))
-        grep -qE "\"values\":\[[^]]*\"$id\"" <<<"$pool_vals" || { echo "contract_drift FAIL: describe advertises tier id $id, which is not a published pool_kind value — a tier the schema cannot express routes nowhere"; fail=1; }
+        grep -qE "\"values\":\[[^]]*\"$id\"" <<<"$pool_vals" || { echo "contract_drift FAIL: describe advertises tier id $id, which is not a published pool_kind value — a tier the schema cannot express routes nowhere"; fail=1; desc_fail=1; }
       done < <(grep -oE '"id":"[a-z_]+"' <<<"$desc" | sed -E 's/.*"([a-z_]+)"$/\1/' || true)
-      [[ "$tier_n" -gt 0 ]] || { echo "contract_drift FAIL: read 0 tier ids out of describe — this check would be vacuous"; fail=1; }
+      [[ "$tier_n" -gt 0 ]] || { echo "contract_drift FAIL: read 0 tier ids out of describe — this check would be vacuous"; fail=1; desc_fail=1; }
     fi
 
-    echo "contract_drift: describe declarations derived-and-served — ${got_codes} error codes (== codeStatus), ${got_db} db_enum + ${got_static} module_constant vocabularies (== declaration source), pricing.model in models[], every tier id a published pool_kind."
+    if [[ "$desc_fail" -eq 0 ]]; then
+      echo "contract_drift: describe declarations derived-and-served — ${got_codes} error codes (== codeStatus == the api-contract's spelled-out count), ${got_db} db_enum + ${got_static} module_constant vocabularies (== declaration source), pricing.model in models[], every tier id a published pool_kind."
+    else
+      echo "contract_drift: describe declaration checks FAILED (see the FAIL lines above) — the served surface and its declaration source disagree."
+    fi
   fi
 else
   echo "contract_drift: no PLATFORM_TOKEN in .env; skipping describe declaration checks (run scripts/dev.sh certs to generate one)."

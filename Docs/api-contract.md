@@ -433,8 +433,12 @@ failure additive-only versioning was meant to prevent.
   `not_found`, `method_not_allowed`, `conflict`, `internal_error`) — a subset of the union table
   above, which also carries
   `adminapi`'s `config_ordering_violation` and the reserved `forbidden`/`unprocessable`/
-  `rate_limited`. Module 3 emits seven at the same `/v1`; the two sets differ legitimately (it has a
-  batch endpoint and a rate-limited test button), and a client that can read both lists needs no
+  `rate_limited`. *(This literal is not left to rot: `contract_drift` reads the number out of this
+  sentence and compares it to `codeStatus`, so a seventh code cannot ship without this line moving.
+  The count moved five → six on 2026-08-04 when item 7b added `method_not_allowed`, and nothing
+  would have caught it staying at five.)* Module 3 emits **eight** at the same `/v1`; the two sets
+  differ legitimately (it has a batch endpoint and a rate-limited test button, so it adds
+  `unprocessable` and `rate_limited`), and a client that can read both lists needs no
   per-module knowledge to handle either. The status is what makes the list actionable for a client
   meeting an unrecognised code: it degrades by status. The fixed **message is deliberately NOT
   published** — it is operator-facing English rather than a branchable value, and publishing it would

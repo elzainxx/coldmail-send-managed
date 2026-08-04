@@ -356,7 +356,63 @@ clamps to a max of **200**; a missing, zero, negative, or non-numeric `page_size
 back to the default (never a `400`). `cursor` is opaque (base64) — pass back exactly what
 `next_cursor` returned; a malformed `cursor` returns `400 validation_failed`. `next_cursor:null`
 means the last page.
-| GET | `/v1/describe` | module self-description (Phase 9 §2, finalized): `capabilities` (honest — `sequences:false`, no tracking, `content_variation:true`) + `pricing` (`unit_price_credits` — the SAME live value `quote` multiplies by — and `tiers` — `shared`/`dedicated`, the one real V1 axis, **identical unit price in V1**; dedicated is isolation, not a premium — plus **`cost_fields_inert`** (bool, additive, audit finding **D22**/fix-plan item 5b): `true` when `unit_price_credits` is `0`, i.e. when `quote`'s `cost` is structurally zero rather than computed, so a cost-preview UI can tell "this module does not charge per recipient" from "the price lookup returned 0" — both are `200` with `cost:0` otherwise. Normally `false` here (this module charges, seeded `1`), but `unit_price_credits` is live-retunable with no redeploy, so an operator CAN put this module in that state — and under a declared `flat_per_recipient` model a `0` contradicts the model, which makes the declaration more load-bearing here, not less. **DERIVED from the live value on every request, never hardcoded**; the `unitprice_test.go` zero-retune block is the control that a literal `false` cannot pass) |
+| GET | `/v1/describe` | module self-description (Phase 9 §2, finalized): `capabilities` (honest — `sequences:false`, no tracking, `content_variation:true`) + `pricing` (`unit_price_credits` — the SAME live value `quote` multiplies by — and `tiers` — `shared`/`dedicated`, the one real V1 axis, **identical unit price in V1**; dedicated is isolation, not a premium — plus **`cost_fields_inert`** (bool, additive, audit finding **D22**/fix-plan item 5b): `true` when `unit_price_credits` is `0`, i.e. when `quote`'s `cost` is structurally zero rather than computed, so a cost-preview UI can tell "this module does not charge per recipient" from "the price lookup returned 0" — both are `200` with `cost:0` otherwise. Normally `false` here (this module charges, seeded `1`), but `unit_price_credits` is live-retunable with no redeploy, so an operator CAN put this module in that state — and under a declared `flat_per_recipient` model a `0` contradicts the model, which makes the declaration more load-bearing here, not less. **DERIVED from the live value on every request, never hardcoded**; the `unitprice_test.go` zero-retune block is the control that a literal `false` cannot pass) + **`model`** (`"flat_per_recipient"` — this module's own answer, unchanged; now emitted from the same constant the declared set below is built from, so the reported model and the declared set cannot be edited apart) + **`models[]`** (fix-plan item 6 — the platform's whole declared set of pricing models, `{flat_per_recipient, flat_subscription, free}`, ADDITIVE-ONLY per Rule 5; `model` above is always a MEMBER of it. `free` is declared though neither sender reports it, deliberately: the point of publishing the set is that a client writes its branch once and handles a module it has not met yet, so declaring only today's two values would make a third module's launch a client-side code change) + **`vocabularies{}`/`error_codes[]`** (fix-plan item 8 — see the dedicated note below) |
+
+**`GET /v1/describe`'s `vocabularies{}` and `error_codes[]`** (fix-plan item 8) — `capabilities` and
+`pricing` told a caller what this module can DO and what it CHARGES, but never which VALUES its
+responses can carry, so every UI hardcoded `job_state`, the tier ids, and the `details[].issue` slugs
+out of prose documentation. That is the per-module special-casing the alignment effort exists to
+remove, and worse: a module ADDING an enum value broke those clients silently, which is the exact
+failure additive-only versioning was meant to prevent.
+
+- **`vocabularies{}`** — one entry per value set a Domain A response can carry, keyed by the
+  vocabulary's name, each `{source, values[], fields[]}`. `source:"db_enum"` entries are read from
+  `pg_enum` **LIVE on every request**, in the type's own `enumsortorder` (the order is part of the
+  contract — a client rendering a legend of `queued→assigned→sending→sent` sees it): an operator who
+  runs `ALTER TYPE … ADD VALUE` changes what `describe` publishes with **no code edit and no
+  redeploy**. Two are published: `job_state` (the only enum both `report` modes put in a body) and
+  `pool_kind` (the tier axis IS the pool-kind axis — `quote.tier` and `pricing.tiers[].id` — so
+  `db_enum` is the truthful description of where those ids come from; a test pins both directions
+  against the live type, since `describeTiers` writes them as Go literals).
+  `source:"module_constant"` entries are the sets with no DB enum behind them (`details[].issue` and
+  `pricing.model`), and their `values[]` reference the SAME Go constants the emitting code path uses —
+  never a re-typed literal. `fields[]` names the response paths that carry the value; every leaf is
+  asserted to be a real JSON field in the production source, so a renamed response field cannot leave
+  a dangling path.
+  **FIVE of this module's seven schema enums are DELIBERATELY absent**, each with a recorded reason —
+  the exclusion list is the bulk of the accounting here, not a footnote on it, because module 2's
+  users own neither accounts, pools, nor workers, so most of the schema's vocabularies describe
+  infrastructure a tenant can neither see nor act on: `box_status` (worker-fleet state, operator-only),
+  `error_class` (internal failure classification; `report` publishes clean external state only, §6.3
+  — a deliberate divergence from module 3, which DOES publish it, because its users own their SMTP
+  accounts and can act on a class), `event_actor` (no Domain-A events route in this module),
+  `pause_reason` (its OUTCOME is published, as the `waiting_for_capacity` count; the reason is not —
+  a tenant cannot unpause an account it does not own), `routing_strategy` (operator-owned pools, so
+  there is no per-user settings object to carry it). The accounting is gated in both directions —
+  every `send_managed` enum type must be either published or excluded, never both and never neither,
+  and an exclusion must carry a substantive reason — so a NEW user-facing enum cannot ship undeclared.
+  `details[].issue` declares **FOUR** slugs here, not the six in the union table above: `conflict` and
+  `forbidden_value` are `internal/adminapi`'s (config `PUT`s), and `describe` publishes what THIS
+  surface can emit, pinned in both directions against the production emission sites.
+- **`error_codes[]`** — every code this module can emit with the HTTP status it maps to
+  (`[{code, http_status}]`, sorted by status then code), **DERIVED by walking the same `codeStatus`
+  map `writeError` resolves a status from**. It therefore cannot list a code the module cannot emit,
+  nor omit one it can. This surface emits **five** (`validation_failed`, `unauthenticated`,
+  `not_found`, `conflict`, `internal_error`) — a subset of the union table above, which also carries
+  `adminapi`'s `config_ordering_violation` and the reserved `forbidden`/`unprocessable`/
+  `rate_limited`. Module 3 emits seven at the same `/v1`; the two sets differ legitimately (it has a
+  batch endpoint and a rate-limited test button), and a client that can read both lists needs no
+  per-module knowledge to handle either. The status is what makes the list actionable for a client
+  meeting an unrecognised code: it degrades by status. The fixed **message is deliberately NOT
+  published** — it is operator-facing English rather than a branchable value, and publishing it would
+  invite clients to match on message text, the coupling the coded envelope exists to eliminate.
+- **`describe` FAILS CLOSED on a vocabulary error**, returning `internal_error` rather than a partial
+  set — the deliberate opposite of `unit_price_credits`, which falls back to its seeded default. A
+  tunable integer has an honest default; a vocabulary does not, since the only fallback available is a
+  hardcoded list, which is precisely the stale-declaration failure this field exists to remove. A
+  client told "these are the values" would be misinformed rather than merely unserved, and `describe`
+  is a discovery call, not the send path. Per the two-vocabulary rule the offending type name appears
+  only in the internal reason logged against the `request_id`, never on the wire.
 
 > The worker↔Control send channel is a THIRD, internal machine-to-machine channel (mTLS, worker-initiated
 > persistent stream on the workerlink stream port) carrying

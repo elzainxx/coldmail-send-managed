@@ -266,6 +266,26 @@ Do this by hand through the API, not through a script. You are testing whether t
 ### Stage 7 — The send path
 
 1. `GET /v1/describe` — tiers and pricing
+   - Also read `vocabularies{}`, `error_codes[]`, and `pricing.models[]` (fix-plan items 6+8), then
+     prove the vocabularies are LIVE rather than a hardcoded list the way a client would care about:
+     ```bash
+     docker compose exec -T postgres psql -U postgres -d platform -c \
+       "ALTER TYPE send_managed.job_state ADD VALUE 'zzz_probe'"
+     curl -s -H "Authorization: Bearer $PLATFORM_TOKEN" http://localhost:8080/v1/describe
+     ```
+     **Pass:** `zzz_probe` appears in `vocabularies.job_state.values` on the very next request with
+     **no rebuild and no redeploy**; `error_codes[]` lists five `{code, http_status}` pairs and **no
+     `message`** (a client must branch on the code, never on operator-facing English);
+     `pricing.model` is a member of `pricing.models[]`; and every `pricing.tiers[].id` is one of the
+     published `pool_kind` values. There is no undo for `ADD VALUE`, so do this on a throwaway stack —
+     or accept a permanently extra label on this dev database.
+   - Then break it deliberately: `ALTER TYPE send_managed.pool_kind RENAME TO pool_kind_x`.
+     **Pass:** `describe` returns `500 internal_error` — it FAILS CLOSED rather than publishing the
+     remaining vocabularies as though that were the whole set — and the envelope does **not** contain
+     the string `pool_kind` (the type name goes only to the log line against the `request_id`,
+     two-vocabulary rule). Contrast with `unit_price_credits`, which deliberately falls back to its
+     seeded default: a tunable integer has an honest default, a vocabulary does not. Rename it back to
+     restore the stack.
 2. `POST /v1/quote` for N recipients
    - **Pass:** `N × unit_price_credits`
    - Do it for several N including the edges — `0`, `1`, `250`, `10000` — and then retune

@@ -279,6 +279,15 @@ func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := dbCtx(r.Context())
 	defer cancel()
 	unit := s.readUnitPriceCredits(ctx)
+	// fix-plan item 8. Read LIVE from pg_enum on every describe — see describe_vocabularies.go's
+	// header for why this one FAILS the request rather than falling back the way readUnitPriceCredits
+	// above deliberately does (a tunable integer has an honest default; a vocabulary does not, and the
+	// only available fallback is the stale hardcoded list this item exists to delete).
+	vocabularies, verr := s.describeVocabularies(ctx)
+	if verr != nil {
+		s.fail(w, r, verr)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"module":      "send_managed",
 		"api_version": "v1",
@@ -291,8 +300,18 @@ func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 			"content_variation":     true,
 		},
 		"pricing": map[string]any{
-			"currency":           "credits",
-			"model":              "flat_per_recipient",
+			"currency": "credits",
+			// The wire value is UNCHANGED ("flat_per_recipient"); it is now the same constant
+			// pricingModels declares, so the reported model and the declared set cannot be edited
+			// apart — a literal here could drift from the set the very next time either is touched.
+			"model": pricingModelFlatPerRecipient,
+			// fix-plan item 6: the declared value set, so a client can switch on `model` without
+			// already knowing every module's answer. ADDITIVE-ONLY (Rule 5) and deliberately WIDER
+			// than what any module reports today — it includes `free`, which neither sender emits,
+			// because the point is that a client writes its branch once and a third module's launch
+			// is not a client-side code change. The control asserts `model` is a MEMBER of `models`,
+			// so this module cannot report a value it did not declare.
+			"models":             pricingModels,
 			"unit_price_credits": unit,
 			"tiers":              describeTiers(unit),
 			// D22 / fix-plan 5b, the M2 half. The finding was raised against module 3, whose
@@ -311,6 +330,15 @@ func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 			// the rule does not.
 			"cost_fields_inert": unit == 0,
 		},
+		// fix-plan item 8, the two additions that turn describe from "what this module can DO" into
+		// "what values its responses can CARRY". vocabularies{} publishes every enum a response on this
+		// surface can hold, read live from the schema; error_codes[] publishes what this module can
+		// emit, derived from the SAME codeStatus map writeError resolves a status from, so it can
+		// neither omit an emittable code nor invent one. Both exist because a UI that cannot ask gets
+		// its answers from prose and breaks silently when a value is added — the failure additive-only
+		// versioning was meant to prevent.
+		"vocabularies": vocabularies,
+		"error_codes":  describeErrorCodes(),
 	})
 }
 

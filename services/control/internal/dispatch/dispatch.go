@@ -10,10 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/coldmail-send-managed/control/internal/credential"
+	"github.com/coldmail-send-managed/control/internal/workerproto"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/coldmail-send-managed/control/internal/workerproto"
-	"github.com/coldmail-send-managed/control/internal/credential"
 )
 
 // Pusher is what the dispatcher needs from the worker channel: deliver one push_job to a named worker,

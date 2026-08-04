@@ -6,9 +6,9 @@ import (
 	"log"
 	"time"
 
+	"github.com/coldmail-send-managed/control/internal/workerproto"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/coldmail-send-managed/control/internal/workerproto"
 )
 
 // OutcomeHandler applies a worker `report` to the DB (§5.3–§5.5). It is installed as the stream

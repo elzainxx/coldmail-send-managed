@@ -16,8 +16,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/coldmail-send-managed/control/internal/configordering"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Config holds the seeded send_managed.config values the dispatcher CONSUMES (config-not-code, §0).
@@ -56,7 +56,7 @@ type Config struct {
 	// against StartupReconnectWindowSec — the Control must see both keys together to reject an unsafe
 	// pair. shutdown_drain_timeout_sec bounds the graceful-shutdown drain (§4.1).
 	StartupReconnectWindowSec int    // startup_reconnect_window_sec — rescan reconnect-reconciliation window (§1.2)
-	WorkerOutcomeBufferTTLSec    int    // box_outcome_buffer_ttl_sec — bound on the worker's outcome buffer (§1.3, P7-4); INVARIANT: >= StartupReconnectWindowSec
+	WorkerOutcomeBufferTTLSec int    // box_outcome_buffer_ttl_sec — bound on the worker's outcome buffer (§1.3, P7-4); INVARIANT: >= StartupReconnectWindowSec
 	ShutdownDrainTimeoutSec   int    // shutdown_drain_timeout_sec — max SIGTERM drain wait before leave-in-place (§4.1, P7-5)
 	RetentionSweepIntervalMS  int    // retention_sweep_interval_ms — the retention housekeeping loop's tick (§3.1)
 	RetentionDeleteBatchSize  int    // retention_delete_batch_size — rows per send_logs DELETE batch (§3.1, owner of Phase 1 #29)
@@ -94,17 +94,17 @@ type Config struct {
 
 	// Phase 9.5 operability & control-plane safety dials (all eleven seeded send_managed_0021;
 	// config-not-code, §6). B1-B5 controls + the S10/S11 completeness dials.
-	DispatchEnabled                 bool           // dispatch_enabled — B1 global panic switch (§1.1)
-	AutoquarantineMode              string         // autoquarantine_mode — B2 shadow ladder off|shadow|enforce (§2.1)
-	AutopauseEnabled                bool           // autopause_enabled — B2 kill-switch (§2.2)
-	VariationEnabled                bool           // variation_enabled — B2 master kill-switch (§2.3)
-	AlertWebhookURL                 string         // alert_webhook_url — B4 optional outbound webhook (§4.3); "" = disabled
-	HealthMetricsWindowSec          int            // health_metrics_window_sec — B3 rolling window (§3.2)
+	DispatchEnabled                   bool           // dispatch_enabled — B1 global panic switch (§1.1)
+	AutoquarantineMode                string         // autoquarantine_mode — B2 shadow ladder off|shadow|enforce (§2.1)
+	AutopauseEnabled                  bool           // autopause_enabled — B2 kill-switch (§2.2)
+	VariationEnabled                  bool           // variation_enabled — B2 master kill-switch (§2.3)
+	AlertWebhookURL                   string         // alert_webhook_url — B4 optional outbound webhook (§4.3); "" = disabled
+	HealthMetricsWindowSec            int            // health_metrics_window_sec — B3 rolling window (§3.2)
 	ControlSingletonAcquireTimeoutSec int            // brain_singleton_acquire_timeout_sec — B5 bounded wait (§5.2)
-	UnitPriceCredits                int            // unit_price_credits — S10 (§2.4)
-	VariationCommentIntensityRates  IntensityRates // variation_comment_intensity_rates — S11 (§2.4)
-	VariationZeroWidthRatePct       int            // variation_zero_width_rate_pct — S11 (§2.4)
-	VariationCSSMicroParams         CSSMicroParams // variation_css_micro_params — S11 (§2.4)
+	UnitPriceCredits                  int            // unit_price_credits — S10 (§2.4)
+	VariationCommentIntensityRates    IntensityRates // variation_comment_intensity_rates — S11 (§2.4)
+	VariationZeroWidthRatePct         int            // variation_zero_width_rate_pct — S11 (§2.4)
+	VariationCSSMicroParams           CSSMicroParams // variation_css_micro_params — S11 (§2.4)
 }
 
 // IntensityRates is the §2.4 S11 inner shape of variation_comment_intensity_rates: percent (0-100)

@@ -30,9 +30,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coldmail-send-managed/control/internal/workerproto"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/coldmail-send-managed/control/internal/workerproto"
 )
 
 // --- the outage injector -----------------------------------------------------------------------

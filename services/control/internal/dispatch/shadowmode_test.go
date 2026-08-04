@@ -67,7 +67,7 @@ func TestShadowMode_LogsWithoutActing_ThenEnforceActs(t *testing.T) {
 	if state != "queued" || !leaseNull {
 		t.Fatalf("job state=%s leaseNull=%v, want queued/true (job policy unaffected by account-effect mode)", state, leaseNull)
 	}
-	e.px.freeAllWorkers()                                                   // the single test worker is still marked in-flight from the first dispatch
+	e.px.freeAllWorkers()                                                 // the single test worker is still marked in-flight from the first dispatch
 	e.setAccountDailyState(t, acctShadow, 100, 0, todayUTC(), false, nil) // ensure still eligible (defensive re-arm)
 	// auth_failure requeues with a ZERO backoff (next_attempt_at=NOW()), so jobShadow itself would
 	// win the very next claim (it's older) — delete it so job2 is unambiguously the one dispatched,

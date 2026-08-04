@@ -25,9 +25,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/coldmail-send-managed/control/internal/workerproto"
 	"github.com/coldmail-send-managed/control/internal/tlsutil"
+	"github.com/coldmail-send-managed/control/internal/workerproto"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -49,7 +49,7 @@ type StreamServer struct {
 	onReport   ReportHandler
 	onRegister func(workerID string) // optional: kick the dispatcher when a worker comes online
 
-	mu    sync.Mutex
+	mu      sync.Mutex
 	workers map[string]*workerConn // worker id -> its live connection (one in-flight job per worker)
 
 	closed chan struct{}
@@ -66,7 +66,7 @@ type workerConn struct {
 	conn     net.Conn
 	enc      *json.Encoder
 	wmu      sync.Mutex
-	workerID    string
+	workerID string
 	inFlight string // job id currently pushed to this worker ("" = idle); guarded by StreamServer.mu
 }
 
@@ -85,7 +85,7 @@ func NewStreamServer(addr string, tlsCfg tlsutil.ServerConfig, db *pgxpool.Pool,
 		ln:       ln,
 		db:       db,
 		onReport: onReport,
-		workers:    make(map[string]*workerConn),
+		workers:  make(map[string]*workerConn),
 		closed:   make(chan struct{}),
 	}, nil
 }

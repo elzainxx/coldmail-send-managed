@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coldmail-send-managed/control/internal/workerproto"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/coldmail-send-managed/control/internal/workerproto"
 )
 
 // attempttoken_lockorder_test.go — Phase 8 CHUNK 1: the per-attempt identity under GENUINE

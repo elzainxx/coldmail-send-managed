@@ -18,8 +18,8 @@ import (
 	"log"
 	"strconv"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/coldmail-send-managed/control/internal/workerproto"
+	"github.com/jackc/pgx/v5"
 )
 
 // accountFlagState is the account's flag snapshot before/after an effect, matching the JSONB shape

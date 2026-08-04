@@ -21,7 +21,7 @@ import (
 // Registry is the Phase-0 worker authorization source: one dev worker id + its token hash (from
 // env; Phase 1 moves this to send_managed.boxes.token_hash). token=authority (P9-A).
 type Registry struct {
-	WorkerID     string
+	WorkerID  string
 	TokenHash string
 }
 
@@ -49,7 +49,7 @@ type Server struct {
 
 type registerReq struct {
 	WorkerID string `json:"box_id"`
-	Token string `json:"token"`
+	Token    string `json:"token"`
 }
 type registerResp struct {
 	OK bool `json:"ok"`

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/coldmail-send-managed/control/internal/workerproto"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestPersistAck_ResolvedOnlyAfterCommit (Phase 7 §1.3, P7-4 — the persist-BEFORE-ack contract,

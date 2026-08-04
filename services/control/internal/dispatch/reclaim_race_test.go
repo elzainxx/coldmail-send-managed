@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/coldmail-send-managed/control/internal/workerproto"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestReclaimRace_OutcomeVsReclaim (ADR-0010 — the mandated two-connection race on the reclaim

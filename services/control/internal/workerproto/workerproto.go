@@ -38,12 +38,12 @@ const (
 type Register struct {
 	Type      string `json:"type"`
 	RequestID string `json:"request_id"`
-	WorkerID     string `json:"box_id"`
+	WorkerID  string `json:"box_id"`
 	Token     string `json:"token"` // authorization AUTHORITY (verified vs send_managed.boxes.token_hash)
 	// Optional diagnostics merged into box_metadata (§3.5); never read by dispatch.
 	WorkerVersion string `json:"box_version,omitempty"`
-	Hostname   string `json:"hostname,omitempty"`
-	StartedAt  string `json:"started_at,omitempty"`
+	Hostname      string `json:"hostname,omitempty"`
+	StartedAt     string `json:"started_at,omitempty"`
 }
 
 // RegisterAck is the Control's accept/reject (§3.1). On reject the Control closes the stream and the
@@ -77,7 +77,7 @@ type RegisterAck struct {
 type Heartbeat struct {
 	Type      string `json:"type"`
 	RequestID string `json:"request_id"`
-	WorkerID     string `json:"box_id"`
+	WorkerID  string `json:"box_id"`
 }
 
 // Send is the rendered message content the worker transmits (§2.3, headers per §8).

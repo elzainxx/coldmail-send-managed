@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coldmail-send-managed/control/internal/workerproto"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/coldmail-send-managed/control/internal/workerproto"
 )
 
 // setAccountDailyState directly overwrites an account's daily-limit bookkeeping (daily_limit,

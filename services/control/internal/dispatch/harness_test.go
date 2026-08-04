@@ -21,11 +21,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coldmail-send-managed/control/internal/adminapi"
+	"github.com/coldmail-send-managed/control/internal/credential"
+	"github.com/coldmail-send-managed/control/internal/workerproto"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/coldmail-send-managed/control/internal/adminapi"
-	"github.com/coldmail-send-managed/control/internal/workerproto"
-	"github.com/coldmail-send-managed/control/internal/credential"
 )
 
 const testKeyID = "cred-dek-test"
@@ -36,12 +36,12 @@ const testKeyID = "cred-dek-test"
 // workers, so a tick can push to more than one worker concurrently. PushJob can be made to fail (to
 // exercise the push-failed requeue).
 type recordingPusher struct {
-	mu         sync.Mutex
-	pushes     []workerproto.PushJob
-	workerID      string          // "" => AnyConnectedWorker returns "" (no worker) unless extraWorkers has an idle one
+	mu           sync.Mutex
+	pushes       []workerproto.PushJob
+	workerID     string          // "" => AnyConnectedWorker returns "" (no worker) unless extraWorkers has an idle one
 	extraWorkers []string        // additional registered worker ids (Chunk 1 multi-worker tests)
-	inFlightBy map[string]bool // per-worker in-flight marker
-	failPush   bool
+	inFlightBy   map[string]bool // per-worker in-flight marker
+	failPush     bool
 }
 
 func (p *recordingPusher) PushJob(pj workerproto.PushJob, workerID string) error {

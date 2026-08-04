@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/coldmail-send-managed/control/internal/workerproto"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestConcurrentOutcomes_QuarantineSurvivesThrottle (R4 HIGH regression) — two concurrent outcome

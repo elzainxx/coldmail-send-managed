@@ -39,7 +39,7 @@ func newMarkerServer(t *testing.T, workerID string, onReport ReportHandler) (*St
 	}()
 	s := &StreamServer{
 		onReport: onReport,
-		workers:    make(map[string]*workerConn),
+		workers:  make(map[string]*workerConn),
 		closed:   make(chan struct{}),
 	}
 	s.workers[workerID] = &workerConn{conn: server, enc: json.NewEncoder(server), workerID: workerID}

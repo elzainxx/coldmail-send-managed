@@ -239,7 +239,7 @@ func TestT2_EventPerTransition(t *testing.T) {
 	c := Connect(t, cloneDSN)
 	uid := SeedUser(t, c, "t2@example.com")
 	poolID := SeedSharedPool(t, c, uid, "t2-pool")
-	workerID := SeedWorker(t, c, uid)                                     // real worker for provenance propagation
+	workerID := SeedWorker(t, c, uid)                               // real worker for provenance propagation
 	acctID := SeedAccount(t, c, uid, poolID)                        // real account for provenance propagation
 	jobID := InsertQueuedJob(t, c, uid, uid, "rcpt-t2@example.com") // genesis event written
 

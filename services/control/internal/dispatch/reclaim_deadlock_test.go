@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/coldmail-send-managed/control/internal/workerproto"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestReclaimRace_DetectorAVsClassifiedFailure (R4-P6 HIGH regression, ADR-0010 §2) — the ONE

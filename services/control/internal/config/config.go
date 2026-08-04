@@ -14,20 +14,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coldmail-send-managed/control/internal/workerlink"
 	"github.com/coldmail-send-managed/control/internal/tlsutil"
+	"github.com/coldmail-send-managed/control/internal/workerlink"
 )
 
 // Config is the resolved Control configuration.
 type Config struct {
 	DatabaseURL             string
 	HealthAddr              string
-	WorkerlinkAddr             string
-	WorkerlinkStreamAddr       string // Phase 3: the persistent send-stream mTLS listener (§2.1)
+	WorkerlinkAddr          string
+	WorkerlinkStreamAddr    string // Phase 3: the persistent send-stream mTLS listener (§2.1)
 	KMSDevKeyFile           string
 	SingletonAcquireTimeout time.Duration
 	TLS                     tlsutil.ServerConfig
-	WorkerRegistry             workerlink.Registry
+	WorkerRegistry          workerlink.Registry
 
 	// Admin API (Domain B, operator). Phase 2. The bearer-key HASHES (bcrypt) are configured
 	// out-of-band (comma-separated for a small key set); the plaintext key is never stored. The
@@ -50,11 +50,11 @@ type Config struct {
 // that has no safe default.
 func FromEnv() (*Config, error) {
 	c := &Config{
-		DatabaseURL:       env("DATABASE_URL", ""),
-		HealthAddr:        env("CONTROL_HEALTH_ADDR", ":8080"),
+		DatabaseURL:          env("DATABASE_URL", ""),
+		HealthAddr:           env("CONTROL_HEALTH_ADDR", ":8080"),
 		WorkerlinkAddr:       env("CONTROL_WORKERLINK_ADDR", ":8443"),
 		WorkerlinkStreamAddr: env("CONTROL_WORKERLINK_STREAM_ADDR", ":8444"),
-		KMSDevKeyFile:     env("KMS_DEV_KEY_FILE", ""),
+		KMSDevKeyFile:        env("KMS_DEV_KEY_FILE", ""),
 	}
 	if c.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
@@ -82,7 +82,7 @@ func FromEnv() (*Config, error) {
 	// to send_managed.boxes.token_hash. token=authority, cert=transport (P9-A). If unset, the
 	// registry rejects all registrations (fail-closed).
 	c.WorkerRegistry = workerlink.Registry{
-		WorkerID:     env("DEV_WORKER_ID", ""),
+		WorkerID:  env("DEV_WORKER_ID", ""),
 		TokenHash: env("DEV_WORKER_TOKEN_HASH", ""),
 	}
 

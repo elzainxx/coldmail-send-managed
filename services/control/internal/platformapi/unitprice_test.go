@@ -37,6 +37,19 @@ func TestUnitPrice_QuoteAndDescribeReflectLiveConfig(t *testing.T) {
 	if unit, ok := pricing["unit_price_credits"].(float64); !ok || unit != 1 {
 		t.Fatalf("describe pricing.unit_price_credits=%v, want 1 (default): %s", pricing["unit_price_credits"], descResp.raw)
 	}
+	// D22 / fix-plan 5b: describe declares whether quote's cost half is inert, so a client never has
+	// to infer it from a bare 0. At M2's seeded default the module really does charge, so this is
+	// false — and note that `false` is ALSO what a hardcoded literal would say here, which is exactly
+	// why the zero-retune block at the end of this test exists as the control.
+	// FAIL-VERIFY: delete the `cost_fields_inert` line from handleDescribe and this fails.
+	inert, ok := pricing["cost_fields_inert"].(bool)
+	if !ok {
+		t.Fatalf("describe pricing missing cost_fields_inert (D22): %s", descResp.raw)
+	}
+	if inert {
+		t.Fatalf("describe pricing.cost_fields_inert=true at the seeded default unit_price_credits=1, "+
+			"want false (this module DOES charge per recipient): %s", descResp.raw)
+	}
 
 	// Live write: PUT unit_price_credits=3 (direct SQL, same effect as the real admin endpoint) —
 	// the VERY NEXT quote/describe must reflect it, no server restart.
@@ -66,5 +79,35 @@ func TestUnitPrice_QuoteAndDescribeReflectLiveConfig(t *testing.T) {
 		if u, ok := tm["unit_price_credits"].(float64); !ok || u != 3 {
 			t.Fatalf("tier %v unit_price_credits=%v after PUT=3, want 3", tm["id"], tm["unit_price_credits"])
 		}
+	}
+
+	// THE ANTI-VACUITY CONTROL for cost_fields_inert (Rule 10). Every assertion above would pass
+	// against a hardcoded `"cost_fields_inert": false`, because false IS the right answer at both
+	// unit=1 and unit=3. So this block drives the one input that separates a derived value from a
+	// literal: retune to 0. That is not a hypothetical — unit_price_credits is the same
+	// live-retunable config key here as in module 3 (Rule 1, no redeploy), so an operator can put
+	// this module into the silent-zero state D22 describes, where quote returns 200 with cost:0 and
+	// a cost-preview UI shows "0 credits" with no error. Under a declared flat_per_recipient model,
+	// 0 contradicts the model, which makes the declaration MORE load-bearing here, not less.
+	// FAIL-VERIFY: change handleDescribe's `unit == 0` to a literal `false` and this fails
+	// ("cost_fields_inert=false at unit_price_credits=0").
+	e.setUnitPriceCredits(t, 0)
+	resp3 := e.do(t, "POST", "/v1/quote", map[string]any{"recipient_count": 10}).requireStatus(t, 200)
+	if cost, ok := resp3.body["cost"].(float64); !ok || cost != 0 {
+		t.Fatalf("quote cost=%v after PUT unit_price_credits=0, want 0: %s", resp3.body["cost"], resp3.raw)
+	}
+	descResp3 := e.do(t, "GET", "/v1/describe", nil).requireStatus(t, 200)
+	pricing3, ok := descResp3.body["pricing"].(map[string]any)
+	if !ok {
+		t.Fatalf("describe missing pricing object (3rd): %s", descResp3.raw)
+	}
+	inert3, ok := pricing3["cost_fields_inert"].(bool)
+	if !ok {
+		t.Fatalf("describe pricing missing cost_fields_inert after zero-retune: %s", descResp3.raw)
+	}
+	if !inert3 {
+		t.Fatalf("describe pricing.cost_fields_inert=false at unit_price_credits=0, want true — quote "+
+			"just returned cost:0, and a client that cannot tell that from a broken price lookup is "+
+			"exactly D22: %s", descResp3.raw)
 	}
 }

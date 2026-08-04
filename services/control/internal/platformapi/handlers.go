@@ -269,6 +269,21 @@ func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 			"model":              "flat_per_recipient",
 			"unit_price_credits": unit,
 			"tiers":              describeTiers(unit),
+			// D22 / fix-plan 5b, the M2 half. The finding was raised against module 3, whose
+			// unit_price_credits is SEEDED 0 — but the declaration belongs here too, and not merely
+			// for cross-module uniformity. unit_price_credits is the same live-retunable config key
+			// in both senders (Rule 1, readUnitPriceCredits, no redeploy), so an operator who zeroes
+			// it HERE puts this module in exactly module 3's position: quote returns 200 with
+			// cost:0, indistinguishable from a broken price lookup, and a cost-preview UI renders
+			// "0 credits" with no error. Under flat_per_recipient that is the more alarming case of
+			// the two, because 0 contradicts the declared model.
+			//
+			// DERIVED, NEVER HARDCODED — and note the literal that would be wrong here is the
+			// opposite of module 3's: `false` is the answer at M2's seeded default ({"v":1}), so a
+			// hardcoded `false` would look correct in every normal run and only lie in the one
+			// situation the field exists for. Same expression in both modules; the default differs,
+			// the rule does not.
+			"cost_fields_inert": unit == 0,
 		},
 	})
 }

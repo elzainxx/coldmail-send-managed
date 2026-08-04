@@ -30,9 +30,23 @@ bearer key and exposes real operational state; it is a Domain B route, not a pro
 
 ```
 GET http://<control-host>:8080/readyz
-expect: HTTP 200 and body {"status":"ready","db":true,"singleton_lock":true,...}
-alert on: any non-200, or db:false, or singleton_lock:false
+expect: HTTP 200 and body
+  {"status":"ready","checks":{"db":true,"singleton_lock":true},"db":true,"singleton_lock":true,"at":"…"}
+alert on: any non-200, or db:false, or singleton_lock:false     <- the TOP-LEVEL fields
 ```
+
+**Which copy to alert on.** The two dependency booleans appear twice, and this is deliberate. The
+top-level `db` / `singleton_lock` are what this section has always told you to watch, and they are
+what the two paragraphs below are about — keep pointing your check at those. The `checks{}` object is
+the platform's *uniform* readiness envelope (`status` / `checks` / `at`), added so one dashboard can
+render all three modules without a parser each: a consumer walks `checks{}` and displays whatever
+names it finds, instead of knowing that this module reports `db` and `singleton_lock` while the
+verify module reports `db` and `pepper`. Both copies are computed from the same two variables, so
+they cannot disagree.
+
+Use `checks{}` if you are building something that must work against more than one module. Use the
+top-level fields for a single-module uptime check — they are the older, narrower, and equally
+supported contract.
 
 - `db:false` — the Control cannot reach Postgres. Dispatch has halted on bounded backoff; the Control
   stays alive and recovers on its own when the DB returns, needing no reconciliation.

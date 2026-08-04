@@ -101,17 +101,19 @@ go_suite tools/send-managed-migrate "migration lifecycle + contiguity guard (app
 # AAD, T5 role-denied-platform-write, T5b job_item_id UNIQUE, T6 append-only job_events). All
 # run against real Postgres clones.
 go_suite tests/harness "DB isolation + Phase 1 data model (claim/events/RLS/crypto/append-only)"
-# The ROOT mux's own routing (item 7b's third surface). Listed HERE, before any template is built,
-# because it is the one Go suite in this file that needs NO infrastructure: it drives the real
-# NewHealthServer wiring in-process with nil db/guard, since what it asserts is what that
-# constructor REGISTERS, not what any handler then does.
+# The ROOT mux's own routing (item 7b's third surface) and /readyz's uniform envelope (item 10).
+# Listed HERE, before any TEMPLATE is built, because nothing in this package needs a migrated
+# schema: the 7b tests drive the real NewHealthServer wiring with nil db/guard (what they assert is
+# what that constructor REGISTERS), and the item-10 tests need only a reachable Postgres — Ping needs
+# no tables and pg_try_advisory_lock needs no schema, so they create a plain throwaway database off
+# TEST_ADMIN_DATABASE_URL, which is exported at the top of this script.
 #
 # It is listed at all because it was missed once: internal/httpapi's first-ever test file landed
 # with item 7b (e3fee99) and nothing ran it. This script names each package explicitly (never
 # `go test ./...`), so a new test package is invisible to the harness AND to CI — which runs only
 # gofmt + vet over ./... and this script — until a line is added here. A written test that nothing
 # executes is worse than no test: it reports coverage it does not provide.
-go_suite services/control/internal/httpapi "root-mux coded 404 + unmounted-surface fallback + log-forgery neutralization (item 7b)"
+go_suite services/control/internal/httpapi "root-mux coded 404 + log-forgery neutralization (item 7b) + readyz uniform checks{} envelope (item 10)"
 
 # --- Phase 2 admin API behavioral suite (real Server over httptest against real PG clones) -----
 # These tests live in the control module (internal/adminapi) and drive the ACTUAL admin handlers
@@ -170,10 +172,20 @@ else
   bad "second Control did NOT report clean singleton exit; output: $(echo "$SECOND_OUT" | tail -3)"
 fi
 # Anti-vacuity: prove the FIRST control is still healthy (the lock is genuinely held, not free).
-if curl -fsS http://localhost:8080/readyz | grep -q '"singleton_lock":true'; then
-  ok "first Control still holds the singleton lock (readyz singleton_lock=true)"
+#
+# The `sed` is REQUIRED, not tidying. Item 10 added the contract's checks{} map, which carries a
+# SECOND "singleton_lock":true inside it, so a bare grep would match the nested copy and keep
+# passing even if the top-level field — the one Docs/monitoring.md tells an uptime monitor to alert
+# on — were deleted. That would make this anti-vacuity check itself vacuous. Strip the checks object
+# first, then grep what remains, so this asserts the TOP-LEVEL field specifically.
+# `[^}]*` is safe because checks{} is a flat object of name->bool; readyz_test.go's
+# TestReadyz_TopLevelFieldsAreDistinguishableFromTheNestedCopy pins that flatness AND pins that
+# stripping it leaves a top-level match behind, so this sed cannot silently stop matching.
+READYZ_TOP="$(curl -fsS http://localhost:8080/readyz | sed 's/"checks":{[^}]*}//')"
+if echo "$READYZ_TOP" | grep -q '"singleton_lock":true'; then
+  ok "first Control still holds the singleton lock (readyz top-level singleton_lock=true)"
 else
-  bad "first Control readyz does not report singleton_lock=true"
+  bad "first Control readyz does not report a TOP-LEVEL singleton_lock=true; body minus checks{}: $READYZ_TOP"
 fi
 
 hr; echo "SUITE 5: worker CANNOT read KMS key material (least-privilege container boundary)"; hr

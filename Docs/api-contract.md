@@ -121,6 +121,15 @@ Properties a client may rely on:
 | GET | `/healthz` | none (Phase 0 stub) | liveness |
 | GET | `/readyz` | none (Phase 0 stub) | readiness: DB reachable AND singleton lock held (true state) |
 
+Both answer `200` with `{"status":…,"at":"<rfc3339>"}`. `/readyz` adds the platform's readiness
+envelope — `{"status":"ready"|"not_ready","checks":{"<dependency>":bool},"at":"<rfc3339>"}` — and
+answers `503` when any check is false. This module's checks are `db` and `singleton_lock`; the names
+live inside `checks{}` precisely so a cross-module consumer can walk the map without knowing which
+module it is talking to. The same two booleans are ALSO present at the top level, unchanged, because
+`monitoring.md` §2 tells a live uptime monitor to alert on them there; both copies derive from the
+same values. `/healthz` carries no `checks` — it checks nothing, and is 200 even with every
+dependency down.
+
 Worker-link channel (mTLS, client cert required; token is the authorization authority):
 
 | Method | Path | Auth | Purpose |

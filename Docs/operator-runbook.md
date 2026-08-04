@@ -45,8 +45,11 @@ curl -fsS $ADMIN/readyz    # is the Control alive and is it THE Control?
 ahealth                    # everything else
 ```
 
-`/readyz` returning `{"status":"ready","db":true,"singleton_lock":true,"at":"…"}` means the Control is up, can
-reach Postgres, and holds the singleton lock. Anything else, or no response at all, and you are in
+`/readyz` returning `{"status":"ready","checks":{"db":true,"singleton_lock":true},"db":true,"singleton_lock":true,"at":"…"}`
+means the Control is up, can reach Postgres, and holds the singleton lock. (`checks{}` is the
+platform-wide readiness envelope; it repeats the same two booleans under a shape shared with the
+other modules. Read either — they are computed from the same values. Every procedure in this runbook
+quotes the top-level ones.) Anything else, or no response at all, and you are in
 [The Control is not running](#the-control-is-not-running) — stop there, because every other symptom is
 downstream of it.
 
@@ -79,8 +82,9 @@ green `/readyz` actively hides — check the log even when every endpoint looks 
 curl -fsS $ADMIN/readyz
 ```
 
-Expect `{"status":"ready","db":true,"singleton_lock":true,"at":"…"}` (`at` is the check timestamp;
-the three fields before it are what you read). If the request fails or
+Expect `{"status":"ready","db":true,"singleton_lock":true,"at":"…"}` plus a `checks{}` object
+carrying the same two booleans (`at` is the check timestamp; `status`, `db` and `singleton_lock` are
+what you read). If the request fails or
 `singleton_lock` is `false`, see [The Control is not running](#the-control-is-not-running). No Control
 means no dispatch, and everything below is moot.
 

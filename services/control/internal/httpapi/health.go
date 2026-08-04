@@ -120,6 +120,25 @@ func (h *HealthServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
 
 // handleReadyz is readiness: DB reachable AND singleton lock genuinely held. Reports the
 // real state (not a hardcoded ok) so the harness can assert against it.
+//
+// FIX-PLAN ITEM 10 (contract §1.9.2): the `checks{}` map is ADDITIVE. The three modules shared not
+// one readiness field name — this surface returned {status, db, singleton_lock, at}, Module 1
+// {ready, config, pepper, supabaseKey} — so a single dashboard needed a parser per module. The
+// uniform part is the ENVELOPE (status/checks/at); the per-module dependency NAMES live inside
+// checks{}, which is what lets one shape describe three modules without pretending they have the
+// same dependencies. A consumer walks checks{} and renders whatever it finds; it never needs to know
+// that this module's names are db and singleton_lock and Module 1's are db and pepper.
+//
+// The two top-level booleans STAY, unchanged, un-nested. Rule 5 is additive-only, and these are not
+// hypothetical consumers: Docs/monitoring.md §2 tells an operator to alert on `db:false` or
+// `singleton_lock:false` at the top level, the harness greps `"singleton_lock":true` as its
+// anti-vacuity proof that the first Control really holds the lock, and operator-runbook.md links a
+// whole recovery procedure off the field name. Nesting them would silently break a live uptime
+// monitor — the change would look like a success until the next incident went unnoticed.
+//
+// Both copies are derived from the SAME two variables, so they cannot disagree by construction —
+// and TestReadyz_ChecksMapAgreesWithTheTopLevelFields pins that, because "by construction" stops
+// being true the moment someone adds a third dependency to only one of the two places.
 func (h *HealthServer) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
@@ -132,7 +151,13 @@ func (h *HealthServer) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		code = http.StatusServiceUnavailable
 	}
 	writeJSON(w, code, map[string]any{
-		"status":         statusWord(dbOK && lockOK),
+		"status": statusWord(dbOK && lockOK),
+		// The contract's uniform envelope (item 10).
+		"checks": map[string]bool{
+			"db":             dbOK,
+			"singleton_lock": lockOK,
+		},
+		// Pre-existing top-level fields — see the additive-only note above.
 		"db":             dbOK,
 		"singleton_lock": lockOK,
 		"at":             time.Now().UTC(),

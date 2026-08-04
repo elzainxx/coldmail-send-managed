@@ -1,7 +1,7 @@
 # Real-infra CI (Phase 0). Runs on every push/PR; a passing run is a REQUIRED status check
 # on the default branch. Brings up the SAME compose stack devs run (base + harness override),
 # executes the real-infra behavioral harness, then the three BLOCKING drift gates. Nothing is
-# mocked — real Postgres + real Brain + real box + real Mailpit (CLAUDE.md Rule 3).
+# mocked — real Postgres + real Control + real worker + real Mailpit (CLAUDE.md Rule 3).
 name: real-infra
 on: [push, pull_request]
 
@@ -17,14 +17,14 @@ jobs:
 
       - name: Go lint — gofmt + vet (BLOCKING; keeps code/format from drifting)
         run: |
-          test -z "$(gofmt -l services/brain tools/sender-migrate tools/provision-box tests/harness)" \
-            || { echo 'gofmt: files need formatting:'; gofmt -l services/brain tools/sender-migrate tools/provision-box tests/harness; exit 1; }
-          (cd services/brain && go vet ./...)
-          (cd tools/sender-migrate && go vet ./...)
-          (cd tools/provision-box && go vet ./...)
+          test -z "$(gofmt -l services/control tools/send-managed-migrate tools/provision-worker tests/harness)" \
+            || { echo 'gofmt: files need formatting:'; gofmt -l services/control tools/send-managed-migrate tools/provision-worker tests/harness; exit 1; }
+          (cd services/control && go vet ./...)
+          (cd tools/send-managed-migrate && go vet ./...)
+          (cd tools/provision-worker && go vet ./...)
           (cd tests/harness && go vet ./...)
 
-      - name: Generate dev certs/secrets + provision dev box (writes .env)
+      - name: Generate dev certs/secrets + provision dev worker (writes .env)
         run: bash scripts/dev.sh certs
 
       - name: Bring up the stack (base + harness override; blocks on healthchecks)
@@ -33,7 +33,7 @@ jobs:
       - name: Real-infra behavioral harness (10 checks, must be all-green)
         run: bash scripts/dev.sh test
 
-      - name: Drift gate — config reference vs seeded sender.config (BLOCKING)
+      - name: Drift gate — config reference vs seeded send_managed.config (BLOCKING)
         if: always()
         run: bash tests/harness/checks/config_drift.sh
 
@@ -61,12 +61,12 @@ jobs:
         if: failure()
         run: |
           docker compose -f docker-compose.yml -f tests/harness/compose.test.yml ps || true
-          docker compose -f docker-compose.yml -f tests/harness/compose.test.yml logs brain box migrate || true
+          docker compose -f docker-compose.yml -f tests/harness/compose.test.yml logs control worker migrate || true
 
       - name: Tear down
         if: always()
         run: bash scripts/dev.sh down || true
 
-  # E11 (single-Brain throughput-ceiling LOAD test) is a before-you-SCALE gate, NOT a
+  # E11 (single-Control throughput-ceiling LOAD test) is a before-you-SCALE gate, NOT a
   # per-push blocker (Phase 9.5 §7). It runs on demand, not here:
   #   workflow_dispatch -> bash scripts/dev.sh test suites/load   (added when E11 lands)

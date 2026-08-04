@@ -1,9 +1,9 @@
 # Canonical dev==CI stack (ADR-0001). Repo root so `-f docker-compose.yml` and the harness
 # override (tests/harness/compose.test.yml) both resolve here. Brings up:
-#   postgres -> migrate (preflight + chain) -> brain (singleton + mTLS + health) -> box(es)
-#   + smtp-sink (Mailpit). Least-privilege secret mounts: the box mounts ONLY its own mTLS
-#   leaf; the Brain alone mounts the KMS key; the sink mounts only its own leaf.
-name: sender-module
+#   postgres -> migrate (preflight + chain) -> control (singleton + mTLS + health) -> worker(es)
+#   + smtp-sink (Mailpit). Least-privilege secret mounts: the worker mounts ONLY its own mTLS
+#   leaf; the Control alone mounts the KMS key; the sink mounts only its own leaf.
+name: coldmail-send-managed
 
 x-pg-env: &pg-env
   POSTGRES_USER: postgres
@@ -25,41 +25,41 @@ services:
       timeout: 3s
       retries: 30
 
-  # One-shot: preflight (public.users + public.job_items exist?) then apply sender_NNNN in
+  # One-shot: preflight (public.users + public.job_items exist?) then apply send_managed_NNNN in
   # ascending order (self-recording). Runs as an admin/owner-capable role (OD-1). Exits 0.
   migrate:
-    build: { context: ., dockerfile: tools/sender-migrate/Dockerfile }
+    build: { context: ., dockerfile: tools/send-managed-migrate/Dockerfile }
     depends_on:
       postgres: { condition: service_healthy }
     environment:
       MIGRATE_DATABASE_URL: postgres://postgres:${POSTGRES_SUPERPASS:-devsuperpass}@postgres:5432/platform
       MIGRATIONS_DIR: /db/migrations
       PREFLIGHT_SQL: /db/preflight/check_platform_tables.sql
-      # After the bootstrap creates sender_module, set its password out-of-band (never in SQL).
-      SENDER_MODULE_PASSWORD: ${SENDER_MODULE_PASSWORD:-devmodulepass}
+      # After the bootstrap creates send_managed_app, set its password out-of-band (never in SQL).
+      SEND_MANAGED_MODULE_PASSWORD: ${SEND_MANAGED_MODULE_PASSWORD:-devmodulepass}
     volumes:
       - ./db:/db:ro
     command: ["up-and-set-password"]
     restart: "no"
 
-  brain:
-    build: { context: ., dockerfile: services/brain/Dockerfile }
+  control:
+    build: { context: ., dockerfile: services/control/Dockerfile }
     depends_on:
       postgres: { condition: service_healthy }
       migrate:  { condition: service_completed_successfully }
     environment:
-      # Brain connects as the module role, NOT superuser.
-      DATABASE_URL: postgres://sender_module:${SENDER_MODULE_PASSWORD:-devmodulepass}@postgres:5432/platform
-      BRAIN_SINGLETON_ACQUIRE_TIMEOUT_SEC: "60"
-      BRAIN_HEALTH_ADDR: ":8080"
-      BRAIN_BOXLINK_ADDR: ":8443"
-      BRAIN_BOXLINK_STREAM_ADDR: ":8444"                  # Phase 3 persistent send stream (mTLS)
-      KMS_DEV_KEY_FILE: /secrets/kms/dev-master.key       # Brain is SOLE decryptor
-      MTLS_SERVER_CERT: /secrets/mtls/brain.crt
-      MTLS_SERVER_KEY:  /secrets/mtls/brain.key
+      # Control connects as the module role, NOT superuser.
+      DATABASE_URL: postgres://send_managed_app:${SEND_MANAGED_MODULE_PASSWORD:-devmodulepass}@postgres:5432/platform
+      CONTROL_SINGLETON_ACQUIRE_TIMEOUT_SEC: "60"
+      CONTROL_HEALTH_ADDR: ":8080"
+      CONTROL_WORKERLINK_ADDR: ":8443"
+      CONTROL_WORKERLINK_STREAM_ADDR: ":8444"                  # Phase 3 persistent send stream (mTLS)
+      KMS_DEV_KEY_FILE: /secrets/kms/dev-master.key       # Control is SOLE decryptor
+      MTLS_SERVER_CERT: /secrets/mtls/control.crt
+      MTLS_SERVER_KEY:  /secrets/mtls/control.key
       MTLS_CA_CERT:     /secrets/mtls/ca.crt
-      DEV_BOX_ID: ${DEV_BOX_ID:-dev-box-1}
-      DEV_BOX_TOKEN_HASH: ${DEV_BOX_TOKEN_HASH:?set DEV_BOX_TOKEN_HASH in .env (provision-box)}
+      DEV_WORKER_ID: ${DEV_WORKER_ID:-dev-worker-1}
+      DEV_WORKER_TOKEN_HASH: ${DEV_WORKER_TOKEN_HASH:?set DEV_WORKER_TOKEN_HASH in .env (provision-worker)}
       # Admin API (Domain B, Phase 2). Operator bearer-key HASHES (comma-separated) — never the
       # plaintext. CREDENTIAL_KEY_ID is the write-key alias stored in credential_key_id (OD-6).
       # The admin surface reuses KMS_DEV_KEY_FILE as the Encrypt-only credential key (OD-7: the
@@ -70,97 +70,97 @@ services:
       # from the operator admin key (Rule 6). If empty the platform surface stays off (fail-closed).
       PLATFORM_TOKEN_HASHES: ${PLATFORM_TOKEN_HASHES:-}
     volumes:
-      # LEAST-PRIVILEGE: Brain is the ONLY service that mounts the kms/ subtree (sole
-      # decryptor). It also gets its own mTLS server leaf + the CA. Never box.key.
+      # LEAST-PRIVILEGE: Control is the ONLY service that mounts the kms/ subtree (sole
+      # decryptor). It also gets its own mTLS server leaf + the CA. Never worker.key.
       - ./secrets/dev/kms/dev-master.key:/secrets/kms/dev-master.key:ro
-      - ./secrets/dev/certs/brain.crt:/secrets/mtls/brain.crt:ro
-      - ./secrets/dev/certs/brain.key:/secrets/mtls/brain.key:ro
+      - ./secrets/dev/certs/control.crt:/secrets/mtls/control.crt:ro
+      - ./secrets/dev/certs/control.key:/secrets/mtls/control.key:ro
       - ./secrets/dev/certs/ca.crt:/secrets/mtls/ca.crt:ro
     ports:
       - "8080:8080"     # health/ready + platform API (Domain A) + admin API (Domain B)
-      - "8443:8443"     # boxlink mTLS (Phase-0 register/heartbeat)
-      - "8444:8444"     # boxlink send-stream mTLS (Phase 3 credential channel)
+      - "8443:8443"     # workerlink mTLS (Phase-0 register/heartbeat)
+      - "8444:8444"     # workerlink send-stream mTLS (Phase 3 credential channel)
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/readyz || exit 1"]
       interval: 3s
       timeout: 3s
       retries: 30
-    # MUST stay above the seeded shutdown_drain_timeout_sec (30s). On SIGTERM the Brain stops
-    # claiming and holds the box stream up so in-flight sends can still REPORT (Phase 7 §4). Docker's
-    # DEFAULT grace is 10s, which SIGKILLs a Brain that is draining correctly — so the drain could
-    # never complete on this stack and `docker compose stop brain` exited 137 instead of 0. Same
+    # MUST stay above the seeded shutdown_drain_timeout_sec (30s). On SIGTERM the Control stops
+    # claiming and holds the worker stream up so in-flight sends can still REPORT (Phase 7 §4). Docker's
+    # DEFAULT grace is 10s, which SIGKILLs a Control that is draining correctly — so the drain could
+    # never complete on this stack and `docker compose stop control` exited 137 instead of 0. Same
     # constraint the systemd unit encodes as TimeoutStopSec=120 (install-and-deploy.md). A SIGKILL is
     # still SAFE (leave-in-place: nothing requeued or marked, next boot's rescan recovers), but it
     # converts a clean drain into avoidable reclaim work. If you raise
     # shutdown_drain_timeout_sec, raise this too.
     stop_grace_period: 90s
 
-  box:
-    build: { context: ., dockerfile: services/box/Dockerfile }
+  worker:
+    build: { context: ., dockerfile: services/worker/Dockerfile }
     depends_on:
-      brain: { condition: service_healthy }
+      control: { condition: service_healthy }
     environment:
-      BRAIN_HOST: brain
-      BRAIN_BOXLINK_PORT: "8443"
-      BRAIN_STREAM_PORT: "8444"
-      BRAIN_SERVER_NAME: brain
-      # sender.boxes.id is a UUID (Phase 1), so the box's STREAM identity is a UUID seeded into
-      # sender.boxes (token=authority, verified against token_hash; the mTLS cert CN stays
-      # "dev-box-1" — cert is transport). The Phase-0 HTTP registry still keys on DEV_BOX_ID.
-      BOX_ID: ${DEV_BOX_UUID:-11111111-1111-1111-1111-111111111111}
-      BOX_TOKEN: ${DEV_BOX_TOKEN:?set DEV_BOX_TOKEN in .env (provision-box)}
-      BOX_HEARTBEAT_INTERVAL_SEC: "10"
-      BOX_SMTP_TIMEOUT_MS: "30000"
-      MTLS_CLIENT_CERT: /secrets/mtls/box.crt
-      MTLS_CLIENT_KEY:  /secrets/mtls/box.key
+      CONTROL_HOST: control
+      CONTROL_WORKERLINK_PORT: "8443"
+      CONTROL_STREAM_PORT: "8444"
+      CONTROL_SERVER_NAME: control
+      # send_managed.boxes.id is a UUID (Phase 1), so the worker's STREAM identity is a UUID seeded into
+      # send_managed.boxes (token=authority, verified against token_hash; the mTLS cert CN stays
+      # "dev-worker-1" — cert is transport). The Phase-0 HTTP registry still keys on DEV_WORKER_ID.
+      WORKER_ID: ${DEV_WORKER_UUID:-11111111-1111-1111-1111-111111111111}
+      WORKER_TOKEN: ${DEV_WORKER_TOKEN:?set DEV_WORKER_TOKEN in .env (provision-worker)}
+      WORKER_HEARTBEAT_INTERVAL_SEC: "10"
+      WORKER_SMTP_TIMEOUT_MS: "30000"
+      MTLS_CLIENT_CERT: /secrets/mtls/worker.crt
+      MTLS_CLIENT_KEY:  /secrets/mtls/worker.key
       MTLS_CA_CERT:     /secrets/mtls/ca.crt
-      # NOTE: no DATABASE_URL, no KMS key — box has neither by construction.
+      # NOTE: no DATABASE_URL, no KMS key — worker has neither by construction.
     volumes:
-      # LEAST-PRIVILEGE: ONLY the box's own mTLS leaf + CA. Never the kms/ subtree, never
-      # brain.key/ca.key. A harness test asserts the box cannot read any KMS material.
-      - ./secrets/dev/certs/box.crt:/secrets/mtls/box.crt:ro
-      - ./secrets/dev/certs/box.key:/secrets/mtls/box.key:ro
+      # LEAST-PRIVILEGE: ONLY the worker's own mTLS leaf + CA. Never the kms/ subtree, never
+      # control.key/ca.key. A harness test asserts the worker cannot read any KMS material.
+      - ./secrets/dev/certs/worker.crt:/secrets/mtls/worker.crt:ro
+      - ./secrets/dev/certs/worker.key:/secrets/mtls/worker.key:ro
       - ./secrets/dev/certs/ca.crt:/secrets/mtls/ca.crt:ro
-    # no host port. NOTE: do NOT use `--scale box=N` to get more boxes — see box2 below.
+    # no host port. NOTE: do NOT use `--scale worker=N` to get more workers — see worker2 below.
 
-  # A SECOND box, with its OWN identity and its OWN token. Behind the `multibox` profile, so it is
-  # off by default: `scripts/dev.sh up2` starts it, and the single-box harness is unaffected.
+  # A SECOND worker, with its OWN identity and its OWN token. Behind the `multiworker` profile, so it is
+  # off by default: `scripts/dev.sh up2` starts it, and the single-worker harness is unaffected.
   #
-  # WHY A SEPARATE SERVICE AND NOT `--scale box=2`: box identity is the authorization subject.
-  # Scaled replicas all inherit ONE BOX_ID/BOX_TOKEN, and boxlink's register path closes the
+  # WHY A SEPARATE SERVICE AND NOT `--scale worker=2`: worker identity is the authorization subject.
+  # Scaled replicas all inherit ONE WORKER_ID/WORKER_TOKEN, and workerlink's register path closes the
   # previous connection when an id re-registers (stream.go — the correct reconnect rule). Two
   # same-id replicas therefore evict each other in a permanent register/disconnect loop and
-  # sender.boxes still shows a single row. Verified by observation, not assumed.
+  # send_managed.boxes still shows a single row. Verified by observation, not assumed.
   #
-  # The mTLS cert is deliberately SHARED with box 1: the cert is TRANSPORT (confidentiality +
-  # "is a box"), while authorizeBox() checks (id, token) against sender.boxes and never pins the
-  # cert CN to a box id. Sharing it is consistent with the security model, not a shortcut.
-  box2:
-    profiles: ["multibox"]
-    build: { context: ., dockerfile: services/box/Dockerfile }
+  # The mTLS cert is deliberately SHARED with worker 1: the cert is TRANSPORT (confidentiality +
+  # "is a worker"), while authorizeWorker() checks (id, token) against send_managed.boxes and never pins the
+  # cert CN to a worker id. Sharing it is consistent with the security model, not a shortcut.
+  worker2:
+    profiles: ["multiworker"]
+    build: { context: ., dockerfile: services/worker/Dockerfile }
     depends_on:
-      brain: { condition: service_healthy }
+      control: { condition: service_healthy }
     environment:
-      BRAIN_HOST: brain
-      BRAIN_BOXLINK_PORT: "8443"
-      BRAIN_STREAM_PORT: "8444"
-      BRAIN_SERVER_NAME: brain
-      BOX_ID: ${DEV_BOX2_UUID:-22222222-2222-2222-2222-222222222222}
-      # A DEFAULT, not `:?` (which box 1 rightly uses). Compose interpolates EVERY service even
+      CONTROL_HOST: control
+      CONTROL_WORKERLINK_PORT: "8443"
+      CONTROL_STREAM_PORT: "8444"
+      CONTROL_SERVER_NAME: control
+      WORKER_ID: ${DEV_WORKER2_UUID:-22222222-2222-2222-2222-222222222222}
+      # A DEFAULT, not `:?` (which worker 1 rightly uses). Compose interpolates EVERY service even
       # when a profile excludes it, so `:?` here would break plain `docker compose ps` for anyone
-      # whose .env predates box 2 — observed, not theorised. An unprovisioned box 2 instead starts
-      # and is cleanly REFUSED by authorizeBox (no sender.boxes row matches this token), which is
+      # whose .env predates worker 2 — observed, not theorised. An unprovisioned worker 2 instead starts
+      # and is cleanly REFUSED by authorizeWorker (no send_managed.boxes row matches this token), which is
       # the correct failure: visible, contained, and it never weakens the token gate.
-      BOX_TOKEN: ${DEV_BOX2_TOKEN:-unprovisioned-run-scripts-dev-sh-certs}
-      BOX_HEARTBEAT_INTERVAL_SEC: "10"
-      BOX_SMTP_TIMEOUT_MS: "30000"
-      MTLS_CLIENT_CERT: /secrets/mtls/box.crt
-      MTLS_CLIENT_KEY:  /secrets/mtls/box.key
+      WORKER_TOKEN: ${DEV_WORKER2_TOKEN:-unprovisioned-run-scripts-dev-sh-certs}
+      WORKER_HEARTBEAT_INTERVAL_SEC: "10"
+      WORKER_SMTP_TIMEOUT_MS: "30000"
+      MTLS_CLIENT_CERT: /secrets/mtls/worker.crt
+      MTLS_CLIENT_KEY:  /secrets/mtls/worker.key
       MTLS_CA_CERT:     /secrets/mtls/ca.crt
-      # NOTE: no DATABASE_URL, no KMS key — same construction as box 1.
+      # NOTE: no DATABASE_URL, no KMS key — same construction as worker 1.
     volumes:
-      - ./secrets/dev/certs/box.crt:/secrets/mtls/box.crt:ro
-      - ./secrets/dev/certs/box.key:/secrets/mtls/box.key:ro
+      - ./secrets/dev/certs/worker.crt:/secrets/mtls/worker.crt:ro
+      - ./secrets/dev/certs/worker.key:/secrets/mtls/worker.key:ro
       - ./secrets/dev/certs/ca.crt:/secrets/mtls/ca.crt:ro
 
   smtp-sink:
@@ -169,23 +169,23 @@ services:
       MP_SMTP_AUTH_ALLOW_INSECURE: "false"
       MP_SMTP_REQUIRE_STARTTLS: "true"     # force STARTTLS so the TLS path is really tested
       # Accept any AUTH credential — but ONLY over STARTTLS (ALLOW_INSECURE=false). This lets the
-      # Phase-3 happy-path send authenticate (the box always AUTHs) while still exercising
+      # Phase-3 happy-path send authenticate (the worker always AUTHs) while still exercising
       # STARTTLS-before-AUTH.
       #
       # LIMITATION, stated plainly because this comment used to overstate it: Mailpit accepts any
       # credential and cannot be made to emit a 535 / 550 / 4xx / throttle, so THIS STACK PROVES THE
       # SUCCESS PATH ONLY. The failed-AUTH / no-STARTTLS / requeue paths are covered by
-      # services/brain/internal/dispatch (policy_test.go, score_test.go, statemachine_test.go,
-      # shadowmode_test.go, classify_test.go) against real Postgres, and by the box's own in-process
-      # Node sink (services/box/test/sink.mjs). A CONTROLLABLE SINK SERVICE reachable from this
+      # services/control/internal/dispatch (policy_test.go, score_test.go, statemachine_test.go,
+      # shadowmode_test.go, classify_test.go) against real Postgres, and by the worker's own in-process
+      # Node sink (services/worker/test/sink.mjs). A CONTROLLABLE SINK SERVICE reachable from this
       # compose network DOES NOT EXIST — an earlier version of this comment claimed one lived in
       # tests/harness; it was never built. Registered in Docs/future-work.md §6; see also the
-      # Stage 9 preamble in Docs/sender-module-local-test-guide.md.
+      # Stage 9 preamble in Docs/coldmail-send-managed-local-test-guide.md.
       MP_SMTP_AUTH_ACCEPT_ANY: "true"
       MP_SMTP_TLS_CERT: /certs/sink.crt
       MP_SMTP_TLS_KEY:  /certs/sink.key
     volumes:
-      # LEAST-PRIVILEGE: sink presents its OWN server leaf only. Never ca.key/brain.key.
+      # LEAST-PRIVILEGE: sink presents its OWN server leaf only. Never ca.key/control.key.
       - ./secrets/dev/certs/sink.crt:/certs/sink.crt:ro
       - ./secrets/dev/certs/sink.key:/certs/sink.key:ro
     ports:

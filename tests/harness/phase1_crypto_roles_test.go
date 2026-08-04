@@ -12,23 +12,23 @@ import (
 )
 
 // Phase 1 behavioral tests — credential encryption + role isolation + append-only log. REAL
-// Postgres, REAL sender_module role (CLAUDE.md Rule 3). The AES-256-GCM key lives ONLY in this
+// Postgres, REAL send_managed_app role (CLAUDE.md Rule 3). The AES-256-GCM key lives ONLY in this
 // harness process, never in the DB — proving the platform-cannot-read property behaviorally.
 
-// moduleDSN returns a DSN authenticated as the sender_module LOGIN role against the given clone.
+// moduleDSN returns a DSN authenticated as the send_managed_app LOGIN role against the given clone.
 // The password is the dev password set out-of-band by compose (scripts/dev.sh / migrate
 // set-app-password). Tests skip if it can't connect (role/password not provisioned).
 func moduleConn(t *testing.T, cloneDSN string) *pgx.Conn {
 	t.Helper()
-	pw := getenv("SENDER_MODULE_PASSWORD")
+	pw := getenv("SEND_MANAGED_MODULE_PASSWORD")
 	if pw == "" {
 		pw = "devmodulepass"
 	}
-	dsn := withUserPass(cloneDSN, "sender_module", pw)
+	dsn := withUserPass(cloneDSN, "send_managed_app", pw)
 	ctx := context.Background()
 	c, err := pgx.Connect(ctx, dsn)
 	if err != nil {
-		t.Fatalf("connect as sender_module: %v", err)
+		t.Fatalf("connect as send_managed_app: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close(context.Background()) })
 	return c
@@ -92,7 +92,7 @@ func TestT4_CredentialRoundTripNoPlaintextTamperAAD(t *testing.T) {
 	}
 	// Also assert via a raw SQL scan of the column (what a DB reader would see).
 	var rawHex string
-	if err := c.QueryRow(ctx, "SELECT encode(credential_ciphertext,'hex') FROM sender.accounts WHERE id=$1", accID).Scan(&rawHex); err != nil {
+	if err := c.QueryRow(ctx, "SELECT encode(credential_ciphertext,'hex') FROM send_managed.accounts WHERE id=$1", accID).Scan(&rawHex); err != nil {
 		t.Fatalf("read raw ct: %v", err)
 	}
 	if strings.Contains(rawHex, hex.EncodeToString(secret)) {
@@ -135,9 +135,9 @@ func TestT4_CredentialRoundTripNoPlaintextTamperAAD(t *testing.T) {
 	}
 }
 
-// TestT5_ModuleRoleDeniedPlatformWrite — as sender_module: SELECT on public.job_items/users
-// succeeds, but INSERT/UPDATE/DELETE fail with 42501; writes to sender.jobs succeed. Proves the
-// one-writer boundary with a REAL failed write (anti-vacuity: the paired SELECT + sender write
+// TestT5_ModuleRoleDeniedPlatformWrite — as send_managed_app: SELECT on public.job_items/users
+// succeeds, but INSERT/UPDATE/DELETE fail with 42501; writes to send_managed.jobs succeed. Proves the
+// one-writer boundary with a REAL failed write (anti-vacuity: the paired SELECT + send_managed write
 // succeed).
 func TestT5_ModuleRoleDeniedPlatformWrite(t *testing.T) {
 	adminDSN := AdminDSN(t)
@@ -173,7 +173,7 @@ func TestT5_ModuleRoleDeniedPlatformWrite(t *testing.T) {
 	assertInsufficientPrivilege(t, m, "UPDATE public.users",
 		"UPDATE public.users SET is_active=false WHERE id=$1", uid)
 
-	// Anti-vacuity positive: the module CAN write its own table (sender.jobs) via the sanctioned
+	// Anti-vacuity positive: the module CAN write its own table (send_managed.jobs) via the sanctioned
 	// path. Use a fresh job_item to satisfy the UNIQUE FK.
 	var freshItem string
 	if err := admin.QueryRow(ctx,
@@ -185,20 +185,20 @@ func TestT5_ModuleRoleDeniedPlatformWrite(t *testing.T) {
 		t.Fatalf("module begin: %v", err)
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, "SELECT set_config('sender.actor','system',true)"); err != nil {
+	if _, err := tx.Exec(ctx, "SELECT set_config('send_managed.actor','system',true)"); err != nil {
 		t.Fatalf("set actor: %v", err)
 	}
 	if _, err := tx.Exec(ctx,
-		"INSERT INTO sender.jobs (job_item_id,campaign_id,user_id,recipient_email,rendered_subject,rendered_body,state,next_attempt_at) VALUES ($1,$2,$2,'z','s','b','queued',NOW())",
+		"INSERT INTO send_managed.jobs (job_item_id,campaign_id,user_id,recipient_email,rendered_subject,rendered_body,state,next_attempt_at) VALUES ($1,$2,$2,'z','s','b','queued',NOW())",
 		freshItem, uid); err != nil {
-		t.Fatalf("module INSERT sender.jobs failed (should succeed): %v", err)
+		t.Fatalf("module INSERT send_managed.jobs failed (should succeed): %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		t.Fatalf("module commit sender.jobs: %v", err)
+		t.Fatalf("module commit send_managed.jobs: %v", err)
 	}
 }
 
-// TestT5b_JobItemIdUnique — a second sender.jobs row for the same job_item_id fails with 23505.
+// TestT5b_JobItemIdUnique — a second send_managed.jobs row for the same job_item_id fails with 23505.
 func TestT5b_JobItemIdUnique(t *testing.T) {
 	adminDSN := AdminDSN(t)
 	template := requireTemplate(t)
@@ -217,11 +217,11 @@ func TestT5b_JobItemIdUnique(t *testing.T) {
 			return err
 		}
 		defer tx.Rollback(ctx)
-		if _, err := tx.Exec(ctx, "SELECT set_config('sender.actor','system',true)"); err != nil {
+		if _, err := tx.Exec(ctx, "SELECT set_config('send_managed.actor','system',true)"); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx,
-			"INSERT INTO sender.jobs (job_item_id,campaign_id,user_id,recipient_email,rendered_subject,rendered_body,state,next_attempt_at) VALUES ($1,$2,$2,'r','s','b','queued',NOW())",
+			"INSERT INTO send_managed.jobs (job_item_id,campaign_id,user_id,recipient_email,rendered_subject,rendered_body,state,next_attempt_at) VALUES ($1,$2,$2,'r','s','b','queued',NOW())",
 			itemID, uid); err != nil {
 			return err
 		}
@@ -240,7 +240,7 @@ func TestT5b_JobItemIdUnique(t *testing.T) {
 	}
 
 	var cnt int
-	if err := c.QueryRow(ctx, "SELECT count(*) FROM sender.jobs WHERE job_item_id=$1", itemID).Scan(&cnt); err != nil {
+	if err := c.QueryRow(ctx, "SELECT count(*) FROM send_managed.jobs WHERE job_item_id=$1", itemID).Scan(&cnt); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if cnt != 1 {
@@ -248,8 +248,8 @@ func TestT5b_JobItemIdUnique(t *testing.T) {
 	}
 }
 
-// TestT6_AppendOnlyJobEvents — as sender_module: UPDATE and direct DELETE on sender.job_events
-// FAIL; INSERT/SELECT succeed; deleting the PARENT sender.jobs row cascades away its events
+// TestT6_AppendOnlyJobEvents — as send_managed_app: UPDATE and direct DELETE on send_managed.job_events
+// FAIL; INSERT/SELECT succeed; deleting the PARENT send_managed.jobs row cascades away its events
 // (cascade cleanup must NOT be blocked). Proves append-only + the deliberate no-DELETE-trigger.
 func TestT6_AppendOnlyJobEvents(t *testing.T) {
 	adminDSN := AdminDSN(t)
@@ -264,45 +264,45 @@ func TestT6_AppendOnlyJobEvents(t *testing.T) {
 	jobID := InsertQueuedJob(t, admin, uid, uid, "rcpt-t6@example.com") // genesis event exists
 
 	var eventID string
-	if err := admin.QueryRow(ctx, "SELECT id FROM sender.job_events WHERE job_id=$1 LIMIT 1", jobID).Scan(&eventID); err != nil {
+	if err := admin.QueryRow(ctx, "SELECT id FROM send_managed.job_events WHERE job_id=$1 LIMIT 1", jobID).Scan(&eventID); err != nil {
 		t.Fatalf("read event id: %v", err)
 	}
 
 	m := moduleConn(t, cloneDSN)
 
 	// UPDATE fails (privilege 42501 or trigger integrity_constraint_violation — either is valid).
-	if _, err := m.Exec(ctx, "UPDATE sender.job_events SET actor='admin' WHERE id=$1", eventID); err == nil {
-		t.Fatal("UPDATE sender.job_events succeeded, want rejection")
+	if _, err := m.Exec(ctx, "UPDATE send_managed.job_events SET actor='admin' WHERE id=$1", eventID); err == nil {
+		t.Fatal("UPDATE send_managed.job_events succeeded, want rejection")
 	}
 	// Direct DELETE fails with insufficient_privilege (no delete-trigger involved).
-	if _, err := m.Exec(ctx, "DELETE FROM sender.job_events WHERE id=$1", eventID); err == nil {
-		t.Fatal("direct DELETE sender.job_events succeeded, want 42501 insufficient_privilege")
+	if _, err := m.Exec(ctx, "DELETE FROM send_managed.job_events WHERE id=$1", eventID); err == nil {
+		t.Fatal("direct DELETE send_managed.job_events succeeded, want 42501 insufficient_privilege")
 	}
 
 	// Anti-vacuity positive: INSERT + SELECT succeed for the module. Insert a standalone event
 	// row for a fresh job (genesis path already proved INSERT via triggers; here direct INSERT).
 	freshJob := InsertQueuedJob(t, admin, uid, uid, "rcpt-t6b@example.com")
 	if _, err := m.Exec(ctx,
-		"INSERT INTO sender.job_events (job_id,user_id,from_state,to_state,actor) VALUES ($1,$2,'queued','assigned','dispatcher')",
+		"INSERT INTO send_managed.job_events (job_id,user_id,from_state,to_state,actor) VALUES ($1,$2,'queued','assigned','dispatcher')",
 		freshJob, uid); err != nil {
-		t.Fatalf("module INSERT sender.job_events failed (should succeed): %v", err)
+		t.Fatalf("module INSERT send_managed.job_events failed (should succeed): %v", err)
 	}
 	var seen int
-	if err := m.QueryRow(ctx, "SELECT count(*) FROM sender.job_events WHERE job_id=$1", jobID).Scan(&seen); err != nil {
+	if err := m.QueryRow(ctx, "SELECT count(*) FROM send_managed.job_events WHERE job_id=$1", jobID).Scan(&seen); err != nil {
 		t.Fatalf("module SELECT job_events failed: %v", err)
 	}
 	if seen < 1 {
 		t.Fatalf("module SELECT returned %d, want >=1", seen)
 	}
 
-	// Cascade cleanup: deleting the PARENT job (module has DELETE on sender.jobs) removes its
+	// Cascade cleanup: deleting the PARENT job (module has DELETE on send_managed.jobs) removes its
 	// events — proving cascade is NOT blocked by the append-only enforcement.
 	before := eventCount(t, admin, jobID)
 	if before < 1 {
 		t.Fatalf("anti-vacuity: job %s had %d events before delete, want >=1", jobID, before)
 	}
-	if _, err := m.Exec(ctx, "DELETE FROM sender.jobs WHERE id=$1", jobID); err != nil {
-		t.Fatalf("module DELETE sender.jobs failed (should succeed): %v", err)
+	if _, err := m.Exec(ctx, "DELETE FROM send_managed.jobs WHERE id=$1", jobID); err != nil {
+		t.Fatalf("module DELETE send_managed.jobs failed (should succeed): %v", err)
 	}
 	if after := eventCount(t, admin, jobID); after != 0 {
 		t.Fatalf("cascade cleanup left %d events for deleted job, want 0", after)
@@ -310,9 +310,9 @@ func TestT6_AppendOnlyJobEvents(t *testing.T) {
 }
 
 // TestT3e_RLSDefaultDenyBackstopsMisgrant — even if a platform role is mistakenly granted
-// USAGE+SELECT on sender.accounts, RLS (enabled, no policy for that role) default-denies =>
+// USAGE+SELECT on send_managed.accounts, RLS (enabled, no policy for that role) default-denies =>
 // zero rows. Proves FORCE RLS on the crown-jewel table backstops a future misgrant. Anti-
-// vacuity: the same rows ARE visible to sender_module (which has a permissive policy), so the
+// vacuity: the same rows ARE visible to send_managed_app (which has a permissive policy), so the
 // zero-count for the misgranted role is meaningful, not an empty table.
 func TestT3e_RLSDefaultDenyBackstopsMisgrant(t *testing.T) {
 	adminDSN := AdminDSN(t)
@@ -328,14 +328,14 @@ func TestT3e_RLSDefaultDenyBackstopsMisgrant(t *testing.T) {
 	// Seed one accounts row (real committed) so the table is non-empty.
 	insertAccount(t, admin, uid, poolID, []byte("0123456789abcdef0"), "test-key-v1", make([]byte, 12))
 
-	// Anti-vacuity: sender_module sees the row (permissive policy admits it).
+	// Anti-vacuity: send_managed_app sees the row (permissive policy admits it).
 	m := moduleConn(t, cloneDSN)
 	var modSees int
-	if err := m.QueryRow(ctx, "SELECT count(*) FROM sender.accounts").Scan(&modSees); err != nil {
+	if err := m.QueryRow(ctx, "SELECT count(*) FROM send_managed.accounts").Scan(&modSees); err != nil {
 		t.Fatalf("module count accounts: %v", err)
 	}
 	if modSees != 1 {
-		t.Fatalf("anti-vacuity: sender_module sees %d accounts, want 1", modSees)
+		t.Fatalf("anti-vacuity: send_managed_app sees %d accounts, want 1", modSees)
 	}
 
 	// Create a stand-in platform role and MISTAKENLY grant it USAGE + SELECT on accounts.
@@ -345,10 +345,10 @@ func TestT3e_RLSDefaultDenyBackstopsMisgrant(t *testing.T) {
 		t.Fatalf("create stand-in role: %v", err)
 	}
 	defer admin.Exec(context.Background(), "DROP ROLE IF EXISTS "+roleName)
-	if _, err := admin.Exec(ctx, "GRANT USAGE ON SCHEMA sender TO "+roleName); err != nil {
+	if _, err := admin.Exec(ctx, "GRANT USAGE ON SCHEMA send_managed TO "+roleName); err != nil {
 		t.Fatalf("grant usage: %v", err)
 	}
-	if _, err := admin.Exec(ctx, "GRANT SELECT ON sender.accounts TO "+roleName); err != nil {
+	if _, err := admin.Exec(ctx, "GRANT SELECT ON send_managed.accounts TO "+roleName); err != nil {
 		t.Fatalf("grant select: %v", err)
 	}
 
@@ -357,7 +357,7 @@ func TestT3e_RLSDefaultDenyBackstopsMisgrant(t *testing.T) {
 		t.Fatalf("set role: %v", err)
 	}
 	var roleSees int
-	if err := admin.QueryRow(ctx, "SELECT count(*) FROM sender.accounts").Scan(&roleSees); err != nil {
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM send_managed.accounts").Scan(&roleSees); err != nil {
 		t.Fatalf("misgranted role count: %v", err)
 	}
 	if _, err := admin.Exec(ctx, "RESET ROLE"); err != nil {
@@ -369,7 +369,7 @@ func TestT3e_RLSDefaultDenyBackstopsMisgrant(t *testing.T) {
 }
 
 // TestT3f_SuperuserBypassesRLSButReadsOnlyCiphertext — the documented residual (03-encryption-
-// and-rls.md §2.5 / T3f): a superuser-class principal BYPASSES RLS and CAN read sender.accounts
+// and-rls.md §2.5 / T3f): a superuser-class principal BYPASSES RLS and CAN read send_managed.accounts
 // rows, but what it reads in credential_ciphertext is ciphertext, never the plaintext secret.
 // This turns the "uncomfortable truth" (RLS can't stop a superuser) into a passing assertion:
 // secrecy holds because the key lives outside the DB (proven here — the harness holds the key,
@@ -405,7 +405,7 @@ func TestT3f_SuperuserBypassesRLSButReadsOnlyCiphertext(t *testing.T) {
 
 	// Superuser bypasses RLS — the row IS visible (anti-vacuity control).
 	var seen int
-	if err := su.QueryRow(ctx, "SELECT count(*) FROM sender.accounts WHERE id=$1", accID).Scan(&seen); err != nil {
+	if err := su.QueryRow(ctx, "SELECT count(*) FROM send_managed.accounts WHERE id=$1", accID).Scan(&seen); err != nil {
 		t.Fatalf("superuser count accounts: %v", err)
 	}
 	if seen != 1 {
@@ -414,7 +414,7 @@ func TestT3f_SuperuserBypassesRLSButReadsOnlyCiphertext(t *testing.T) {
 
 	// ...but what it reads is ciphertext, not the plaintext secret.
 	var rawHex string
-	if err := su.QueryRow(ctx, "SELECT encode(credential_ciphertext,'hex') FROM sender.accounts WHERE id=$1", accID).Scan(&rawHex); err != nil {
+	if err := su.QueryRow(ctx, "SELECT encode(credential_ciphertext,'hex') FROM send_managed.accounts WHERE id=$1", accID).Scan(&rawHex); err != nil {
 		t.Fatalf("superuser read ciphertext: %v", err)
 	}
 	if strings.Contains(rawHex, hex.EncodeToString(secret)) {
@@ -424,7 +424,7 @@ func TestT3f_SuperuserBypassesRLSButReadsOnlyCiphertext(t *testing.T) {
 	// holds no key material by asserting the secret's plaintext appears nowhere in the row's
 	// text columns either.
 	var host, uname, kid string
-	if err := su.QueryRow(ctx, "SELECT smtp_host, smtp_username, credential_key_id FROM sender.accounts WHERE id=$1", accID).Scan(&host, &uname, &kid); err != nil {
+	if err := su.QueryRow(ctx, "SELECT smtp_host, smtp_username, credential_key_id FROM send_managed.accounts WHERE id=$1", accID).Scan(&host, &uname, &kid); err != nil {
 		t.Fatalf("superuser read row: %v", err)
 	}
 	if strings.Contains(host, string(secret)) || strings.Contains(uname, string(secret)) || strings.Contains(kid, string(secret)) {
@@ -462,14 +462,14 @@ func TestT7_CheckConstraintsRejectInvalid(t *testing.T) {
 	}
 
 	// (1) accounts_pause_reason_check: paused=TRUE with NULL pause_reason is INVALID.
-	acctBad := `INSERT INTO sender.accounts
+	acctBad := `INSERT INTO send_managed.accounts
 	  (user_id,pool_id,smtp_host,smtp_port,smtp_username,credential_ciphertext,credential_key_id,credential_nonce,from_address,paused,pause_reason)
 	  VALUES ($1,$2,'h',587,'u','\x00','k','\x00','a@b.co',TRUE,NULL)`
 	if _, err := c.Exec(ctx, acctBad, uid, poolID); !isCheckViolation(err) {
 		t.Fatalf("pause_reason: paused=TRUE, reason=NULL should be 23514, got: %v", err)
 	}
 	// positive control: paused=TRUE with a reason succeeds.
-	acctOK := `INSERT INTO sender.accounts
+	acctOK := `INSERT INTO send_managed.accounts
 	  (user_id,pool_id,smtp_host,smtp_port,smtp_username,credential_ciphertext,credential_key_id,credential_nonce,from_address,paused,pause_reason)
 	  VALUES ($1,$2,'h',587,'u','\x00','k','\x00','a@b.co',TRUE,'daily_limit')`
 	if _, err := c.Exec(ctx, acctOK, uid, poolID); err != nil {
@@ -479,11 +479,11 @@ func TestT7_CheckConstraintsRejectInvalid(t *testing.T) {
 	// (2) jobs_last_error_message_len_check: 2001 chars INVALID, 2000 chars valid.
 	itemID := SeedJobItem(t, c, uid, uid, "rcpt-t7@example.com")
 	over := strings.Repeat("x", 2001)
-	jobOver := `INSERT INTO sender.jobs (job_item_id,campaign_id,user_id,recipient_email,rendered_subject,rendered_body,state,next_attempt_at,last_error_message)
+	jobOver := `INSERT INTO send_managed.jobs (job_item_id,campaign_id,user_id,recipient_email,rendered_subject,rendered_body,state,next_attempt_at,last_error_message)
 	            VALUES ($1,$2,$2,'r','s','b','queued',NOW(),$3)`
 	// Set actor GUC so the genesis trigger doesn't mask the CHECK with an actor error path
 	// (INSERT genesis is lenient, but set it anyway for clarity).
-	if _, err := c.Exec(ctx, "SELECT set_config('sender.actor','system',false)"); err != nil {
+	if _, err := c.Exec(ctx, "SELECT set_config('send_managed.actor','system',false)"); err != nil {
 		t.Fatalf("set actor: %v", err)
 	}
 	if _, err := c.Exec(ctx, jobOver, itemID, uid, over); !isCheckViolation(err) {
@@ -500,14 +500,14 @@ func TestT7_CheckConstraintsRejectInvalid(t *testing.T) {
 	// Insert a pool, then UPDATE it to point fallback at itself => 23514.
 	var p2 string
 	if err := c.QueryRow(ctx,
-		"INSERT INTO sender.pools (user_id,kind,name) VALUES ($1,'shared','t7-fb') RETURNING id", uid).Scan(&p2); err != nil {
+		"INSERT INTO send_managed.pools (user_id,kind,name) VALUES ($1,'shared','t7-fb') RETURNING id", uid).Scan(&p2); err != nil {
 		t.Fatalf("seed pool2: %v", err)
 	}
-	if _, err := c.Exec(ctx, "UPDATE sender.pools SET fallback_pool_id=id WHERE id=$1", p2); !isCheckViolation(err) {
+	if _, err := c.Exec(ctx, "UPDATE send_managed.pools SET fallback_pool_id=id WHERE id=$1", p2); !isCheckViolation(err) {
 		t.Fatalf("self-fallback should be 23514, got: %v", err)
 	}
 	// positive control: pointing fallback at a DIFFERENT pool succeeds.
-	if _, err := c.Exec(ctx, "UPDATE sender.pools SET fallback_pool_id=$2 WHERE id=$1", p2, poolID); err != nil {
+	if _, err := c.Exec(ctx, "UPDATE send_managed.pools SET fallback_pool_id=$2 WHERE id=$1", p2, poolID); err != nil {
 		t.Fatalf("cross-pool fallback positive control failed: %v", err)
 	}
 }
@@ -522,7 +522,7 @@ func insertAccount(t *testing.T, c *pgx.Conn, userID, poolID string, ct []byte, 
 func updateCredential(t *testing.T, c *pgx.Conn, accID string, ct []byte, keyID string, nonce []byte) {
 	t.Helper()
 	if _, err := c.Exec(context.Background(),
-		"UPDATE sender.accounts SET credential_ciphertext=$2, credential_key_id=$3, credential_nonce=$4 WHERE id=$1",
+		"UPDATE send_managed.accounts SET credential_ciphertext=$2, credential_key_id=$3, credential_nonce=$4 WHERE id=$1",
 		accID, ct, keyID, nonce); err != nil {
 		t.Fatalf("update credential: %v", err)
 	}
@@ -531,7 +531,7 @@ func updateCredential(t *testing.T, c *pgx.Conn, accID string, ct []byte, keyID 
 func readCredential(t *testing.T, c *pgx.Conn, accID string) (ct []byte, nonce []byte, keyID string) {
 	t.Helper()
 	if err := c.QueryRow(context.Background(),
-		"SELECT credential_ciphertext, credential_nonce, credential_key_id FROM sender.accounts WHERE id=$1", accID).
+		"SELECT credential_ciphertext, credential_nonce, credential_key_id FROM send_managed.accounts WHERE id=$1", accID).
 		Scan(&ct, &nonce, &keyID); err != nil {
 		t.Fatalf("read credential: %v", err)
 	}

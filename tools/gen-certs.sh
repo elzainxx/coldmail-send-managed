@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# gen-certs — generate local-dev mTLS material for the box<->Brain channel + the SMTP sink.
+# gen-certs — generate local-dev mTLS material for the worker<->Control channel + the SMTP sink.
 #
 # DEV ONLY: the dev CA never leaves dev and is NOT the prod trust root (prod uses a real
 # CA / secret store; a formal cert PKI with rotate/revoke is post-V1). token=authority,
 # cert=transport (P9-A). ca.key never leaves the certs dir and is gitignored.
 #
-# Least-privilege layout (mirrors the compose mounts): box mounts only box.crt/box.key/
-# ca.crt; Brain mounts only brain.crt/brain.key/ca.crt + the KMS key; sink mounts only
+# Least-privilege layout (mirrors the compose mounts): worker mounts only worker.crt/worker.key/
+# ca.crt; Control mounts only control.crt/control.key/ca.crt + the KMS key; sink mounts only
 # sink.crt/sink.key.
 #
 # Portability: all subjects/SANs are declared in an openssl CONFIG FILE written into $OUT
@@ -52,7 +52,7 @@ distinguished_name = dn
 prompt = no
 x509_extensions = v3ca
 [dn]
-CN = sender-dev-ca
+CN = send-managed-dev-ca
 [v3ca]
 basicConstraints = critical, CA:TRUE
 keyUsage = critical, keyCertSign, cRLSign
@@ -73,13 +73,13 @@ leaf() {
   rm -f "$OUT/$name.csr" "$OUT/$name.cnf"
 }
 
-# 2) Brain server cert (reachable as "brain" in compose, "localhost" on host).
-leaf brain "brain" "DNS:brain,DNS:localhost,IP:127.0.0.1"
-# 3) Box client cert (CN carries the box id).
-leaf box "dev-box-1" "DNS:box,DNS:localhost"
-# 4) SMTP sink server cert (its own leaf — sink NEVER gets ca.key/brain.key).
+# 2) Control server cert (reachable as "control" in compose, "localhost" on host).
+leaf control "control" "DNS:control,DNS:localhost,IP:127.0.0.1"
+# 3) Worker client cert (CN carries the worker id).
+leaf worker "dev-worker-1" "DNS:worker,DNS:localhost"
+# 4) SMTP sink server cert (its own leaf — sink NEVER gets ca.key/control.key).
 leaf sink "smtp-sink" "DNS:smtp-sink,DNS:localhost"
 
 rm -f "$OUT/ca.cnf"
 chmod 600 "$OUT"/*.key 2>/dev/null || true
-echo "gen-certs: done. CA + brain/box/sink leaves in $OUT (ca.key stays here, gitignored)."
+echo "gen-certs: done. CA + control/worker/sink leaves in $OUT (ca.key stays here, gitignored)."

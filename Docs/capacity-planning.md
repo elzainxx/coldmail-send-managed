@@ -1,8 +1,8 @@
 # Capacity planning
 
-How many sending accounts you need for a given daily volume, how many boxes, and — the question
+How many sending accounts you need for a given daily volume, how many workers, and — the question
 that actually decides a deployment — **which limit binds first**. The short answer is almost always
-*per-account daily limits*, not the Brain.
+*per-account daily limits*, not the Control.
 
 [`config-reference.md`](./config-reference.md) is the authoritative source for every key named
 below, and the only file the `config_drift` CI gate checks. **Sizing arithmetic cannot be done
@@ -27,16 +27,16 @@ result (which ceiling binds) is what this page is for, not the specific figures.
 | Ceiling | What sets it | Character |
 |---|---|---|
 | **Per-account daily volume** | `daily_limit` per account (default from `daily_limit_default`), enforced against a per-account daily counter that resets at `daily_reset_hour` in `daily_reset_timezone` | A **hard, deliberate** cap. Reached in the normal course of business. Raising it is a reputation decision, not a scaling one. |
-| **Single-Brain send rate** | The Brain's own dispatch throughput: **~370 sends/min measured**, ~300–370/min sustained band | A **soft, measured** ceiling on specific hardware. Not a designed limit. |
+| **Single-Control send rate** | The Control's own dispatch throughput: **~370 sends/min measured**, ~300–370/min sustained band | A **soft, measured** ceiling on specific hardware. Not a designed limit. |
 
 The measured figure is the 2026-07-26 run in [`load-test-results.md`](./load-test-results.md): 4 vCPU
-/ 8 GiB Docker host, 6 real boxes, RAM-backed Postgres. Read it with that run's own caveat — the box
-side was likely still a partial co-bottleneck at 6 boxes, so ~370/min is *this hardware's practical
-ceiling*, not the Brain's isolated maximum. Re-run `tests/harness/load_e11.sh` before any material
+/ 8 GiB Docker host, 6 real workers, RAM-backed Postgres. Read it with that run's own caveat — the worker
+side was likely still a partial co-bottleneck at 6 workers, so ~370/min is *this hardware's practical
+ceiling*, not the Control's isolated maximum. Re-run `tests/harness/load_e11.sh` before any material
 capacity increase and append a dated entry; do not extrapolate from the table below.
 
 **370 sends/min is ~533,000 sends/day** if you could sustain it for 24 hours. You cannot, and you
-would not want to — but it establishes the scale: the Brain is not the constraint for any realistic
+would not want to — but it establishes the scale: the Control is not the constraint for any realistic
 V1 volume. Accounts are.
 
 ---
@@ -50,18 +50,18 @@ At the 500/account/day figure declared above (`daily_limit_default`):
 
 | Target sends/day | Accounts at 500/day (bare minimum) | With ~30% headroom (**deploy this**) | Peak rate needed (over an 8h window) | Which limit binds first |
 |---|---|---|---|---|
-| 1,000 | 2 | 3 | ~2/min | **Account daily limits.** Brain is idle. |
+| 1,000 | 2 | 3 | ~2/min | **Account daily limits.** Control is idle. |
 | 5,000 | 10 | 13 | ~10/min | **Account daily limits.** |
 | 10,000 | 20 | 26 | ~21/min | **Account daily limits.** |
 | 25,000 | 50 | 65 | ~52/min | **Account daily limits.** |
-| 50,000 | 100 | 130 | ~104/min | **Account daily limits.** Brain at ~30% of measured ceiling. |
-| 100,000 | 200 | 260 | ~208/min | **Account daily limits** — but the Brain is now at ~55% of measured ceiling. Re-run the load test. |
-| 200,000 | 400 | 520 | ~417/min | **The Brain binds.** ~417/min exceeds the measured ~370/min. Spread the window, or re-run the load test with more boxes before committing. |
+| 50,000 | 100 | 130 | ~104/min | **Account daily limits.** Control at ~30% of measured ceiling. |
+| 100,000 | 200 | 260 | ~208/min | **Account daily limits** — but the Control is now at ~55% of measured ceiling. Re-run the load test. |
+| 200,000 | 400 | 520 | ~417/min | **The Control binds.** ~417/min exceeds the measured ~370/min. Spread the window, or re-run the load test with more workers before committing. |
 
 The peak-rate column assumes the volume is delivered inside an 8-hour window (`volume ÷ 480 min`),
-which is the realistic case for business-hours sending — and it is what turns the Brain into a
+which is the realistic case for business-hours sending — and it is what turns the Control into a
 constraint far earlier than the 533k/day arithmetic suggests. If you send around the clock, divide by
-1440 instead and the Brain constraint moves out by ~3×.
+1440 instead and the Control constraint moves out by ~3×.
 
 Two things this table does **not** account for, both of which push the account count up:
 
@@ -79,14 +79,14 @@ Two things this table does **not** account for, both of which push the account c
 ## 3. Why account daily limits almost always bind first
 
 For any volume where a small team would deploy this module, the arithmetic is one-sided: 26 accounts
-at the default limit cover 10k/day, and 10k/day is ~21 sends/min — under 6% of the measured Brain
-ceiling. You will add accounts long, long before you add a second Brain (which you cannot do anyway:
-the singleton is a locked invariant, and horizontal Brain scaling is
+at the default limit cover 10k/day, and 10k/day is ~21 sends/min — under 6% of the measured Control
+ceiling. You will add accounts long, long before you add a second Control (which you cannot do anyway:
+the singleton is a locked invariant, and horizontal Control scaling is
 [future work](./future-work.md)).
 
 The practical consequence: **treat "the pool is exhausted" as the normal scaling signal, and
-"send_rate_per_min has plateaued while boxes sit idle and the queue grows" as the rare one.** The
-first means add accounts. Only the second means you have hit the Brain, and it is the specific
+"send_rate_per_min has plateaued while workers sit idle and the queue grows" as the rare one.** The
+first means add accounts. Only the second means you have hit the Control, and it is the specific
 saturation signature the load test documents.
 
 There is one important asymmetry: a pool at its daily limit reports `headroom: "exhausted"` and its
@@ -96,20 +96,20 @@ entirely; size so it clears within the same day.
 
 ---
 
-## 4. How many boxes?
+## 4. How many workers?
 
-A box holds **one job in flight**. That makes box count a function of send *rate* and per-send
+A worker holds **one job in flight**. That makes worker count a function of send *rate* and per-send
 duration, not of daily volume:
 
 ```
-boxes ≈ peak sends/min × (average seconds per send ÷ 60)
+workers ≈ peak sends/min × (average seconds per send ÷ 60)
 ```
 
 An SMTP send is typically 1–3 seconds including connect, TLS, AUTH, and DATA. At 100 sends/min with
-2s sends, that is ~3.3 concurrently busy boxes; round up generously, because a box waiting on a slow
-provider is a box doing nothing else.
+2s sends, that is ~3.3 concurrently busy workers; round up generously, because a worker waiting on a slow
+provider is a worker doing nothing else.
 
-| Peak sends/min | Boxes (2s/send, rounded up with headroom) |
+| Peak sends/min | Workers (2s/send, rounded up with headroom) |
 |---|---|
 | 20 | 2 (minimum for redundancy, not throughput) |
 | 50 | 3 |
@@ -117,12 +117,12 @@ provider is a box doing nothing else.
 | 200 | 8–10 |
 | 370 (measured ceiling) | 12+ — and at this point re-run the load test |
 
-Floor of **two boxes regardless of volume**: one box is a single point of failure for the entire send
-path. Overflow is handled gracefully — when no box is free, the job is cleanly requeued as
-`no_box_available`, which is backpressure, not a stall — so under-provisioning boxes costs throughput,
+Floor of **two workers regardless of volume**: one worker is a single point of failure for the entire send
+path. Overflow is handled gracefully — when no worker is free, the job is cleanly requeued as
+`no_worker_available`, which is backpressure, not a stall — so under-provisioning workers costs throughput,
 never correctness.
 
-Boxes are cheap and stateless. Over-provision them; they are the least risky thing to add.
+Workers are cheap and stateless. Over-provision them; they are the least risky thing to add.
 
 ---
 
@@ -148,8 +148,8 @@ table dominates it.
 
 Do not size from this page alone. Two checks first:
 
-1. **Re-run the load test on your hardware.** `bash tests/harness/load_e11.sh [N_BOXES] [MAX_LANES]`,
-   with a materially larger `N_BOXES` than 6 if you are anywhere near 200/min. Append a dated entry to
+1. **Re-run the load test on your hardware.** `bash tests/harness/load_e11.sh [N_WORKERES] [MAX_LANES]`,
+   with a materially larger `N_WORKERES` than 6 if you are anywhere near 200/min. Append a dated entry to
    [`load-test-results.md`](./load-test-results.md) — it is a versioned artifact, never overwritten.
 2. **Confirm your providers' real per-mailbox limits.** The seeded `daily_limit_default` is a
    conservative stand-in.
@@ -165,4 +165,4 @@ Do not size from this page alone. Two checks first:
 | [`load-test-results.md`](./load-test-results.md) | The measured ceiling, the method, and how to re-run it. |
 | [`operator-runbook.md`](./operator-runbook.md) | Pool exhausted, `waiting_for_capacity`, and reading the health endpoint. |
 | [`config-reference.md`](./config-reference.md) | Every key named on this page. |
-| [`future-work.md`](./future-work.md) | Brain horizontal scaling and the rest of what is not built. |
+| [`future-work.md`](./future-work.md) | Control horizontal scaling and the rest of what is not built. |

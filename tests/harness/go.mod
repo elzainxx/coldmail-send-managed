@@ -1,4 +1,4 @@
-module github.com/sender-module/harness
+module github.com/coldmail-send-managed/harness
 
 go 1.23
 

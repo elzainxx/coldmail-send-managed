@@ -1,11 +1,11 @@
-# Phase-aware expected sender.config key manifest (OD-6).
+# Phase-aware expected send_managed.config key manifest (OD-6).
 # One key name per line. The CI config_drift gate asserts:
-#   live sender.config key set  ==  this manifest  ==  the config-reference.md table.
-# Each config-seeding migration (Phase 1's sender_0010 onward) appends its keys here in the
-# SAME change, so the gate grows monotonically to the eventual 53-key total after sender_0021
+#   live send_managed.config key set  ==  this manifest  ==  the config-reference.md table.
+# Each config-seeding migration (Phase 1's send_managed_0010 onward) appends its keys here in the
+# SAME change, so the gate grows monotonically to the eventual 53-key total after send_managed_0021
 # (amended from 50 — P8-OD-1, Phase 8 grew from 14 to 17 keys post-Chunk-5).
 #
-# Phase 1 — sender_0010 (14 keys, the foundation; Phase 9 §4.1).
+# Phase 1 — send_managed_0010 (14 keys, the foundation; Phase 9 §4.1).
 daily_limit_default
 daily_reset_timezone
 daily_reset_hour
@@ -21,17 +21,17 @@ job_max_processing_time_sec
 debug_log_retention_days
 default_shared_pool_id
 
-# Phase 5 — sender_0017 (+3 keys: scoring weights, backoff ladder, throttle window).
+# Phase 5 — send_managed_0017 (+3 keys: scoring weights, backoff ladder, throttle window).
 status_score_weights
 retry_backoff_schedule
 throttle_pause_seconds
 
-# Phase 6 — sender_0018 (+2 keys: reclaim-loop poll interval, box SMTP-operation timeout).
+# Phase 6 — send_managed_0018 (+2 keys: reclaim-loop poll interval, worker SMTP-operation timeout).
 reclaim_tick_interval_ms
 smtp_operation_timeout_sec
 
-# Phase 7 — sender_0019 (+6 keys: startup rescan window, shutdown drain, retention sweep/batch,
-# rollup granularity, box outcome-buffer TTL). Fully schema-neutral (no new table).
+# Phase 7 — send_managed_0019 (+6 keys: startup rescan window, shutdown drain, retention sweep/batch,
+# rollup granularity, worker outcome-buffer TTL). Fully schema-neutral (no new table).
 startup_reconnect_window_sec
 shutdown_drain_timeout_sec
 retention_sweep_interval_ms
@@ -39,9 +39,9 @@ retention_delete_batch_size
 rollup_granularity
 box_outcome_buffer_ttl_sec
 
-# Phase 8 — sender_0020 (+17 keys: content-variation toggles + their 5 toggle-parameters). Config
-# rows appended to the SAME sender_0020 version file that Chunk 1 created for sender.jobs.attempt_token
-# (flagged migration-filename deviation from the locked spec's own sender_0020_content_variation_config
+# Phase 8 — send_managed_0020 (+17 keys: content-variation toggles + their 5 toggle-parameters). Config
+# rows appended to the SAME send_managed_0020 version file that Chunk 1 created for send_managed.jobs.attempt_token
+# (flagged migration-filename deviation from the locked spec's own send_managed_0020_content_variation_config
 # name — see Docs/open-decisions.md P8-OD-1 and the .up.sql's own comment). All 17 default off/neutral
 # so the whole set at default is byte-identical to Phase 3 (§4/T1). AMENDED 2026-07-26 from 14 to 17
 # (P8-OD-1, RULED): variation_css_magnitude_px / variation_zero_width_rate / variation_user_agent_rate
@@ -64,7 +64,7 @@ variation_user_agent_rate
 variation_precedence
 variation_thread_index
 
-# Phase 9.5 — sender_0021 (+11 keys: B1-B5 operability controls + S10/S11 config-not-code
+# Phase 9.5 — send_managed_0021 (+11 keys: B1-B5 operability controls + S10/S11 config-not-code
 # completeness dials). Fully schema-neutral (no DDL, no new table/column/enum/constraint/index).
 dispatch_enabled
 autoquarantine_mode

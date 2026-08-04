@@ -1,5 +1,5 @@
 # config-consumers.txt — the Config Consumption Sweep's permanent ledger (Phase 9.5 CLOSEOUT,
-# 2026-07-27). One line per seeded sender.config key (must match config-manifest.txt exactly, in
+# 2026-07-27). One line per seeded send_managed.config key (must match config-manifest.txt exactly, in
 # any order): a real dial cannot pass config_drift alone — it must ALSO have a genuine consumer
 # cited here, or be explicitly marked RESERVED (never both silent AND passing).
 #

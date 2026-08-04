@@ -3,7 +3,7 @@
 # Run: docker compose -f docker-compose.yml -f tests/harness/compose.test.yml up
 #   (or set COMPOSE_FILE=docker-compose.yml:tests/harness/compose.test.yml)
 # It changes ONLY test-specific knobs: RAM-backed Postgres for speed. Everything else
-# (real Brain, real box, real Mailpit, real migrations) is identical to what devs run.
+# (real Control, real worker, real Mailpit, real migrations) is identical to what devs run.
 services:
   postgres:
     # Speed only on throwaway test data; changes nothing about locking/triggers/advisory

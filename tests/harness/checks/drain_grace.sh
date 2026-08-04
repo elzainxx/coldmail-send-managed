@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# drain_grace — BLOCKING CI gate. Asserts the Brain's SIGTERM→SIGKILL grace CLEARS the seeded
+# drain_grace — BLOCKING CI gate. Asserts the Control's SIGTERM→SIGKILL grace CLEARS the seeded
 # shutdown_drain_timeout_sec, in every place that bound is expressed.
 #
 # WHY THIS EXISTS. Phase 7 §4's graceful shutdown gives in-flight sends up to
 # shutdown_drain_timeout_sec (seeded 30s) to report before leaving them for the next boot's rescan.
-# If the supervisor's stop grace is SHORTER, it SIGKILLs a Brain that is draining correctly and the
+# If the supervisor's stop grace is SHORTER, it SIGKILLs a Control that is draining correctly and the
 # drain branch becomes unreachable — silently. That is exactly what shipped: docker-compose.yml
 # declared no stop_grace_period, so Docker's 10s default truncated every in-flight drain
-# (`docker compose stop brain` exited 137 after ~11s), and Stage 11 step 5 of the local test guide
+# (`docker compose stop control` exited 137 after ~11s), and Stage 11 step 5 of the local test guide
 # is what finally caught it. The invariant was already documented in three places
 # (config-reference.md, the install-and-deploy.md systemd unit's TimeoutStopSec, the
 # operator-runbook.md row naming this exact failure) — only the compose file contradicted them, and
@@ -28,10 +28,10 @@ DC="${COMPOSE_INVOCATION:-docker compose -f docker-compose.yml -f tests/harness/
 fail=0
 
 # 1) The seeded drain window is the authority (config-not-code, Rule 1): read it from the live DB,
-#    never from a literal here. If sender.config is not up yet, fall back to the migration's seed so
+#    never from a literal here. If send_managed.config is not up yet, fall back to the migration's seed so
 #    the gate still runs standalone.
 drain="$($DC exec -T postgres psql -U postgres -d platform -tAc \
-  "SELECT value->>'v' FROM sender.config WHERE key='shutdown_drain_timeout_sec'" 2>/dev/null \
+  "SELECT value->>'v' FROM send_managed.config WHERE key='shutdown_drain_timeout_sec'" 2>/dev/null \
   | tr -d '[:space:]' || true)"
 if [[ -z "$drain" ]]; then
   drain="$(grep -rhoE "'shutdown_drain_timeout_sec'[^)]*\{\"v\": *[0-9]+\}" db/migrations/ 2>/dev/null \
@@ -42,15 +42,15 @@ if [[ -z "$drain" ]]; then
   exit 1
 fi
 
-# 2) Docker: the brain service's stop_grace_period, in seconds. Absent => Docker's 10s default,
+# 2) Docker: the control service's stop_grace_period, in seconds. Absent => Docker's 10s default,
 #    which is the bug this gate exists to catch, so absence is a FAILURE, not a skip.
 grace_raw="$(awk '
   /^  [a-z0-9_-]+:/ { svc = $1; sub(":", "", svc) }
-  svc == "brain" && /^[[:space:]]*stop_grace_period:/ { print $2; exit }
+  svc == "control" && /^[[:space:]]*stop_grace_period:/ { print $2; exit }
 ' docker-compose.yml | tr -d '[:space:]')"
 if [[ -z "$grace_raw" ]]; then
-  echo "drain_grace FAIL: docker-compose.yml brain service has NO stop_grace_period."
-  echo "  Docker then defaults to 10s and SIGKILLs a Brain draining for ${drain}s (exit 137)."
+  echo "drain_grace FAIL: docker-compose.yml control service has NO stop_grace_period."
+  echo "  Docker then defaults to 10s and SIGKILLs a Control draining for ${drain}s (exit 137)."
   fail=1
 else
   # Accept 90s / 90 / 2m / 1m30s.
@@ -62,17 +62,17 @@ else
   elif [[ "$g" =~ ^([0-9]+)s?$ ]]; then
     secs="${BASH_REMATCH[1]}"
   else
-    echo "drain_grace FAIL: cannot parse brain stop_grace_period '$grace_raw'"
+    echo "drain_grace FAIL: cannot parse control stop_grace_period '$grace_raw'"
     fail=1
   fi
   if [[ "$fail" -eq 0 && "$secs" -le "$drain" ]]; then
-    echo "drain_grace FAIL: brain stop_grace_period ${grace_raw} (${secs}s) <= shutdown_drain_timeout_sec ${drain}s."
-    echo "  Docker will SIGKILL a Brain that is draining correctly. Raise stop_grace_period."
+    echo "drain_grace FAIL: control stop_grace_period ${grace_raw} (${secs}s) <= shutdown_drain_timeout_sec ${drain}s."
+    echo "  Docker will SIGKILL a Control that is draining correctly. Raise stop_grace_period."
     fail=1
   fi
 fi
 
-# 3) systemd: the documented Brain unit's TimeoutStopSec must clear the same key. The unit lives in
+# 3) systemd: the documented Control unit's TimeoutStopSec must clear the same key. The unit lives in
 #    the install guide (no prod compose file is shipped — see install-and-deploy.md), so the doc IS
 #    the artifact under test here.
 tss="$(grep -oE '^TimeoutStopSec=[0-9]+' Docs/install-and-deploy.md 2>/dev/null \

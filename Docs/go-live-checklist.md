@@ -17,7 +17,7 @@ through.
 ## 1. Set `default_shared_pool_id` (REQUIRED — base sending does not work without it)
 
 **Why it blocks:** Phase 4 §4.2/§4.3 — base (non-dedicated) campaigns resolve their sending pool
-through `default_shared_pool_id`. It is seeded `NULL` (Phase 1 `sender_0010`) and stays `NULL`
+through `default_shared_pool_id`. It is seeded `NULL` (Phase 1 `send_managed_0010`) and stays `NULL`
 until an operator sets it. Every base-campaign job created before this is set stays cleanly
 `queued` (`shared_pool_not_configured`, logged once per interval, never an error the platform
 sees) — it does not fail loudly, which means it is easy to forget.
@@ -61,10 +61,10 @@ silently adapt the module's assumptions.
   `9_000_000_000–9_999_999_999` advisory-lock key band (`Docs/advisory-locks.md`) for its own
   singleton guard + per-user campaign-start locks. If the platform's own migrator or application
   code uses advisory locks in the SAME Postgres instance, confirm it does not use this band.
-- **Migration admin credential (G1 / OD-1).** The migration runner (`tools/sender-migrate`)
+- **Migration admin credential (G1 / OD-1).** The migration runner (`tools/send-managed-migrate`)
   connects via `MIGRATE_DATABASE_URL` as an admin/owner-capable role, DISTINCT from the
-  login-only, non-superuser `sender_module` app role — it must be able to `CREATE ROLE`/
-  `CREATE SCHEMA`/assign ownership to `sender_owner`. Confirm which real role that is in the live
+  login-only, non-superuser `send_managed_app` app role — it must be able to `CREATE ROLE`/
+  `CREATE SCHEMA`/assign ownership to `send_managed_owner`. Confirm which real role that is in the live
   environment and that its credential is sourced from the platform's secret store, never
   committed to a repo or migration file.
 
@@ -76,15 +76,15 @@ infrastructure.
 
 ## 4. Verify KMS/IAM separation — platform roles must NOT hold Decrypt (G4 / S15)
 
-**Why it blocks:** this is CLAUDE.md Rule 6's load-bearing security property — "Brain is the SOLE
-decryptor. KMS Decrypt is Brain-only. The platform and operators hold NO Decrypt capability." It
+**Why it blocks:** this is CLAUDE.md Rule 6's load-bearing security property — "Control is the SOLE
+decryptor. KMS Decrypt is Control-only. The platform and operators hold NO Decrypt capability." It
 is enforced structurally in code (the `internal/credential` Decryptor is wired only into
 `internal/dispatch`, never into `internal/adminapi` — OD-7) but the actual cloud IAM grant is
 **not code-checkable**; it is a deployment/infrastructure configuration that must be verified
 against the real KMS key policy.
 
 **Action (a deployment-checklist sign-off, per S15's ruling):**
-1. Confirm the prod KMS key's IAM policy grants `Decrypt` to the Brain's runtime role ONLY.
+1. Confirm the prod KMS key's IAM policy grants `Decrypt` to the Control's runtime role ONLY.
 2. Confirm the admin/operator-facing service's IAM role has `Encrypt`/DEK-wrap grants but
    explicitly NOT `Decrypt` (mirrors the code-level separation: `internal/adminapi`'s `Encryptor`
    has no `Decrypt` method at all).
@@ -95,49 +95,49 @@ against the real KMS key policy.
 
 ---
 
-## 5. Provision boxes out-of-band (token = authority, cert = transport, revocation)
+## 5. Provision workers out-of-band (token = authority, cert = transport, revocation)
 
-**Why it's a checklist item, not a build gap:** V1 deliberately has no `/v1/admin/boxes` REST
-surface (P9-A, RULED — Phase 9 §5.4a). Box lifecycle is an out-of-band operator procedure using
-`tools/provision-box`.
+**Why it's a checklist item, not a build gap:** V1 deliberately has no `/v1/admin/workers` REST
+surface (P9-A, RULED — Phase 9 §5.4a). Worker lifecycle is an out-of-band operator procedure using
+`tools/provision-worker`.
 
-**Action — provisioning a new box:**
-1. `provision-box new [--id <id>]` — mints a `box_id` (client-supplied UUID; the operator's
+**Action — provisioning a new worker:**
+1. `provision-worker new [--id <id>]` — mints a `box_id` (client-supplied UUID; the operator's
    choice) + a high-entropy token + its bcrypt hash. **Record the plaintext token somewhere it
-   will reach the box's own deploy config — it is never stored anywhere else and cannot be
+   will reach the worker's own deploy config — it is never stored anywhere else and cannot be
    recovered after this step.**
-2. `provision-box seed --id <id> --token-hash <hash>` — emits the SQL to insert/update the
-   `sender.boxes` row (`token_hash`, `status='active'`). Run it against the live DB via the
-   migration-admin role (never `sender_module` directly, matching the rest of the module's DDL
+2. `provision-worker seed --id <id> --token-hash <hash>` — emits the SQL to insert/update the
+   `send_managed.boxes` row (`token_hash`, `status='active'`). Run it against the live DB via the
+   migration-admin role (never `send_managed_app` directly, matching the rest of the module's DDL
    discipline).
-3. Deploy the box process with the plaintext token in its own environment/secret store. On first
-   connect it `register`s over mTLS; the Brain hashes the presented token and compares to
+3. Deploy the worker process with the plaintext token in its own environment/secret store. On first
+   connect it `register`s over mTLS; the Control hashes the presented token and compares to
    `token_hash` — a match starts routing jobs to it.
-4. Confirm: `docker compose logs brain` (or the equivalent prod log sink) shows
-   `box registered id="<id>"`.
+4. Confirm: `docker compose logs control` (or the equivalent prod log sink) shows
+   `worker registered id="<id>"`.
 
-**Action — decommissioning/rotating a box:**
-1. `provision-box revoke --id <id>` — emits SQL clearing/rotating `token_hash` and setting
+**Action — decommissioning/rotating a worker:**
+1. `provision-worker revoke --id <id>` — emits SQL clearing/rotating `token_hash` and setting
    `status='disabled'`. Run it against the live DB.
-2. **Stop the box process.** The token check runs only in the register handshake, so the SQL above
-   refuses the *next* connect but does not disconnect a box that is already streaming — and until it
-   disconnects the Brain keeps pushing it credentialed jobs. For a planned decommission you are
+2. **Stop the worker process.** The token check runs only in the register handshake, so the SQL above
+   refuses the *next* connect but does not disconnect a worker that is already streaming — and until it
+   disconnects the Control keeps pushing it credentialed jobs. For a planned decommission you are
    stopping it anyway; for a *suspected compromise* isolate the host **first** and revoke second
    ([`disaster-recovery.md`](./disaster-recovery.md) §4a).
-3. On its next connect attempt the box is refused regardless of its still-valid mTLS client
-   cert (**token is the authority; cert is transport only** — a decommissioned box cannot talk
+3. On its next connect attempt the worker is refused regardless of its still-valid mTLS client
+   cert (**token is the authority; cert is transport only** — a decommissioned worker cannot talk
    its way back in with cert alone).
-4. Any job that box held in flight falls to the Phase 6 reclaim loop and re-dispatches to a live
-   box automatically — no manual job requeue needed.
+4. Any job that worker held in flight falls to the Phase 6 reclaim loop and re-dispatches to a live
+   worker automatically — no manual job requeue needed.
 5. **Rotation** is the same procedure as decommission + re-provisioning: revoke the old token,
-   mint + seed a new one, roll the box's deploy secret.
+   mint + seed a new one, roll the worker's deploy secret.
 
 ---
 
 ## 6. Decide when to promote auto-quarantine from `shadow` to `enforce`
 
 **Why it's a checklist item:** `autoquarantine_mode` seeds `shadow` (Phase 9.5 §2.1) — a
-deliberate launch-safety default. In `shadow`, the Brain computes the SAME quarantine decision it
+deliberate launch-safety default. In `shadow`, the Control computes the SAME quarantine decision it
 would in `enforce` and logs it (`account_events`, a `shadow_would_quarantine` observation), but
 does not act — the account keeps sending. This gives an operator a real trial period to observe
 what the scoring model WOULD do before it starts actually quarantining accounts.
@@ -159,7 +159,7 @@ what the scoring model WOULD do before it starts actually quarantining accounts.
    entirely (not just deferred) — distinct from `shadow`, which still computes and logs.
 
 **Do not promote silently.** This is the one kill-switch flip in the whole system that changes
-what happens to a REAL account (it starts getting quarantined), not just what the Brain observes
+what happens to a REAL account (it starts getting quarantined), not just what the Control observes
 — treat the promotion itself as a deliberate, reviewed operational change, not a config tweak.
 
 ---
@@ -173,9 +173,9 @@ that full figure on day one if the pool needs the volume, with no automatic grad
 default actually is: [`config-reference.md`](./config-reference.md).)
 
 **Also check while you are looking at the accounts:** no account's `smtp_host` is a private-range or
-link-local address. The API accepts one, but the box **skips TLS certificate verification** for those
+link-local address. The API accepts one, but the worker **skips TLS certificate verification** for those
 (a harness affordance for the local sink), so the credential would cross an unverified connection —
-[`security-posture.md`](./security-posture.md) §3.13. `SELECT id, smtp_host FROM sender.accounts;`
+[`security-posture.md`](./security-posture.md) §3.13. `SELECT id, smtp_host FROM send_managed.accounts;`
 
 **Action:** if the SMTP accounts being provisioned are genuinely new (freshly created mailboxes,
 new sending domains, accounts that haven't built sending reputation with receiving providers),
@@ -194,7 +194,7 @@ reactive handling is not a substitute for a sensible warm-up plan on the operato
 **Why it blocks:** SMTP credentials are encrypted with a key held **outside** the database. A DB
 backup restores ciphertext and nothing else. Lose the key and **every SMTP credential is permanently
 unrecoverable** — recovery is a manual password reset at each provider, for every account. There is
-no escrow and no recovery share, and Decrypt is Brain-only by design (CLAUDE.md Rule 6), so nothing
+no escrow and no recovery share, and Decrypt is Control-only by design (CLAUDE.md Rule 6), so nothing
 can rescue the plaintext.
 
 **Action:** work through [`disaster-recovery.md`](./disaster-recovery.md) §1 before the **first real
@@ -206,7 +206,7 @@ credential is entered** — not before launch, before the first `smtp_secret`. S
       label fails AAD authentication).
 - [ ] The "where the backup lives / who can reach it" table is **filled in**. An unfilled table is
       the same as no backup.
-- [ ] The **recovery drill has been run** on staging and reached a completed send. A clean Brain
+- [ ] The **recovery drill has been run** on staging and reached a completed send. A clean Control
       startup proves only that the key is 32 bytes — it does **not** prove the key is right. Only a
       decrypt proves a restore.
 
@@ -238,10 +238,10 @@ This is the single most missable operational fact in the system.
 - [ ] A scheduled health poll exists (the cron entry in `monitoring.md` §3). This is what makes the
       webhook work.
 - [ ] `alert_webhook_url` is set, and a test alert has actually been **received** — not just
-      configured. Note `SENDER_ALERT_WEBHOOK_URL` in `.env.example` is **inert**; the config row is
+      configured. Note `SEND_MANAGED_ALERT_WEBHOOK_URL` in `.env.example` is **inert**; the config row is
       the only source.
 - [ ] Logs are shipped somewhere with retention. The internal `reason=` behind a client error
-      envelope exists **only** in the Brain's log; without retention, a reported error is a code and
+      envelope exists **only** in the Control's log; without retention, a reported error is a code and
       a request id with nothing behind them. **This is also your only record of config changes** —
       there is no `config_events` table, so a `PUT /v1/admin/config` leaves a process-log line and
       nothing else. Retention here is an audit control, not just an ops convenience
@@ -277,7 +277,7 @@ then a small real batch. It is written to be small, to addresses you control, an
 3. **Before the first live send:** item 4 (KMS/IAM sign-off) — the sole-decryptor security
    property must be verified against real infrastructure before any real credential is decrypted.
    Item 10 (monitoring) as well: going live unmonitored means finding out from a customer.
-4. **Before the first live campaign:** items 1 (`default_shared_pool_id`) and 5 (box
+4. **Before the first live campaign:** items 1 (`default_shared_pool_id`) and 5 (worker
    provisioning) and 7 (account pre-warming) — the system has no capacity to route a job until
    these are done. Then item 11 (the real-provider smoke test) — the first live send is a
    deliberate, small, watched one, never a campaign.

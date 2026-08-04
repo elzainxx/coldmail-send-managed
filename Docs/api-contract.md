@@ -2,7 +2,7 @@
 
 Authoritative source: **Phase 9 §5** + `history/phase-9-contract-and-doc-completions.md`.
 This file mirrors the served surface and is verified by the CI `contract_drift` gate
-against the Brain's registered routes.
+against the Control's registered routes.
 
 ## Auth domains (never share a credential)
 
@@ -82,12 +82,12 @@ The full, additive-only `error.code` enum:
 | GET | `/healthz` | none (Phase 0 stub) | liveness |
 | GET | `/readyz` | none (Phase 0 stub) | readiness: DB reachable AND singleton lock held (true state) |
 
-Box-link channel (mTLS, client cert required; token is the authorization authority):
+Worker-link channel (mTLS, client cert required; token is the authorization authority):
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| POST | `/v1/box/register` | mTLS client cert + registration token | box registers (id + one-time token) |
-| POST | `/v1/box/heartbeat` | mTLS client cert + prior registration | box heartbeat |
+| POST | `/v1/worker/register` | mTLS client cert + registration token | worker registers (id + one-time token) |
+| POST | `/v1/worker/heartbeat` | mTLS client cert + prior registration | worker heartbeat |
 
 > Two-vocabulary rule: error envelopes carry only `{code}` (Phase 0) — no internal reason,
 > SQL, credential, or hostname. Additive-only: these routes never rename; later phases add.
@@ -101,7 +101,7 @@ All under `/v1/admin/*`; every route requires the operator `platform_admin` bear
 internal reason, SQL, SQLSTATE, credential, ciphertext, key-id, or internal hostname (§1.2 of
 `history/phase-2-account-management.md`). Additive-only: these routes never rename; later phases add.
 
-**Accounts** (`sender.accounts`; `smtp_secret` is write-only — reads expose only `has_credential`):
+**Accounts** (`send_managed.accounts`; `smtp_secret` is write-only — reads expose only `has_credential`):
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -109,7 +109,7 @@ internal reason, SQL, SQLSTATE, credential, ciphertext, key-id, or internal host
 | GET | `/v1/admin/accounts` | list (cursor paginated; filters `pool_id`/`paused`/`quarantined`/`disabled`/`user_id`) |
 | GET | `/v1/admin/accounts/{id}` | read one |
 | PATCH | `/v1/admin/accounts/{id}` | update (omit `smtp_secret` = unchanged, structural) |
-| DELETE | `/v1/admin/accounts/{id}` | hard delete → `204`. The audit row survives: `sender.job_events` and `sender.account_events` rows for the account are KEPT, with their `account_id` set to NULL by the FK and every other column byte-unchanged (`sender_0024`, ADR-0012). Deleting a **box** behaves the same way (`box_id` → NULL). *Historical note: from Phase 1 through Phase 10 this returned `500` for any account that had ever been assigned a job — `job_events`' two `ON DELETE SET NULL` FKs were blocked by its unconditional append-only trigger. Fixed 2026-07-29 by `sender_0024`; nothing was ever dropped or corrupted, the delete simply aborted atomically. If you see a `500` here, check that migration `0024` is applied* |
+| DELETE | `/v1/admin/accounts/{id}` | hard delete → `204`. The audit row survives: `send_managed.job_events` and `send_managed.account_events` rows for the account are KEPT, with their `account_id` set to NULL by the FK and every other column byte-unchanged (`send_managed_0024`, ADR-0012). Deleting a **worker** behaves the same way (`box_id` → NULL). *Historical note: from Phase 1 through Phase 10 this returned `500` for any account that had ever been assigned a job — `job_events`' two `ON DELETE SET NULL` FKs were blocked by its unconditional append-only trigger. Fixed 2026-07-29 by `send_managed_0024`; nothing was ever dropped or corrupted, the delete simply aborted atomically. If you see a `500` here, check that migration `0024` is applied* |
 | GET | `/v1/admin/accounts/{id}/events` | read the account audit trail (cursor paginated) |
 
 ### `POST /v1/admin/accounts` request body
@@ -156,7 +156,7 @@ distinct — asserted behaviorally, not by convention. Flag names are already pu
 read model's `status` object, so this discloses nothing new and the two-vocabulary rule still holds:
 the internal reason (`already_in_state:*`, `not_in_state:*`, `not_manual_pause`) stays log-only.
 
-**Pools** (`sender.pools`; `user_id` derived from `kind`, never a request field):
+**Pools** (`send_managed.pools`; `user_id` derived from `kind`, never a request field):
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -166,7 +166,7 @@ the internal reason (`already_in_state:*`, `not_in_state:*`, `not_manual_pause`)
 | PATCH | `/v1/admin/pools/{id}` | update (`kind`/`owner_user_id` immutable) |
 | DELETE | `/v1/admin/pools/{id}` | delete (RESTRICT if it still has accounts → clean 409) |
 
-**Config** (`sender.config`; JSONB `{"v": …}` unwrapped/rewrapped; only `value` writable).
+**Config** (`send_managed.config`; JSONB `{"v": …}` unwrapped/rewrapped; only `value` writable).
 
 The `PUT` request body is `{"value": <v>}` — the bare JSON value at `value`, **not** the stored
 `{"v": …}` envelope, which is an internal storage detail the API unwraps on read and re-wraps on
@@ -187,14 +187,14 @@ Same operator admin auth as the routes above (`Authorization: Bearer <admin key>
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/v1/admin/health` | read-only operability snapshot (§3 B3): dispatch cadence/pause state, queue counts by state, box liveness, per-account-status summary, per-pool eligibility headroom, error-class counts over a rolling window, the auto-quarantine shadow-mode summary, and active alert conditions (§4 B4) — all derived from existing tables, no new persisted state |
+| GET | `/v1/admin/health` | read-only operability snapshot (§3 B3): dispatch cadence/pause state, queue counts by state, worker liveness, per-account-status summary, per-pool eligibility headroom, error-class counts over a rolling window, the auto-quarantine shadow-mode summary, and active alert conditions (§4 B4) — all derived from existing tables, no new persisted state |
 
 ### `GET /v1/admin/health` response fields
 
 The authoritative field list (`internal/adminapi/health_handler.go`'s `healthResponse`). Every
 top-level block is always present; `errors_last_window` always carries all six `error_class` keys
 even when a class did not fire, so a poller can index it by name unconditionally.
-`oldest_active_heartbeat_age_sec` is the one omittable field (absent when no box is active).
+`oldest_active_heartbeat_age_sec` is the one omittable field (absent when no worker is active).
 For how to *interpret* these numbers, see [`operator-runbook.md`](./operator-runbook.md).
 
 | Field | Type | Notes |
@@ -205,10 +205,10 @@ For how to *interpret* these numbers, see [`operator-runbook.md`](./operator-run
 | `dispatch.ticks_per_min` | float | observed dispatch cadence |
 | `dispatch.sends_last_window` | int | sends completed inside `window_sec` |
 | `dispatch.send_rate_per_min` | float | derived from the two above |
-| `queue.{queued,assigned,sending,sent,failed,bounced}` | int | `COUNT(*) GROUP BY state` over `sender.jobs` — one field per `job_state` |
+| `queue.{queued,assigned,sending,sent,failed,bounced}` | int | `COUNT(*) GROUP BY state` over `send_managed.jobs` — one field per `job_state` |
 | `queue.waiting_for_capacity` | int | queued jobs whose resolved pool chain has ZERO eligible accounts. **Not an error state** |
-| `boxes.{active,stale,disabled}` | int | counts by `box_status` |
-| `boxes.oldest_active_heartbeat_age_sec` | int, **omitted** when no active box | staleness of the least-recently-heard-from active box |
+| `workers.{active,stale,disabled}` | int | counts by `box_status` |
+| `workers.oldest_active_heartbeat_age_sec` | int, **omitted** when no active worker | staleness of the least-recently-heard-from active worker |
 | `accounts.{healthy,paused,quarantined,disabled,at_daily_limit}` | int | per-status summary; `at_daily_limit` is derived, not a status |
 | `pools[]` | array | `{pool_id, kind, eligible_accounts, headroom}` — `headroom` is a word, not a number |
 | `errors_last_window` | object | `{bounce_permanent, transport_4xx, auth_failure, throttle, timeout, unknown}` → int. Always all six keys. Counts **error transitions only** — see the note below |
@@ -217,20 +217,20 @@ For how to *interpret* these numbers, see [`operator-runbook.md`](./operator-run
 | `shadow.recent[]` | array | `{account_id, score, threshold, at}` |
 | `active_conditions[]` | array | `{condition, severity, detail{}, since}` — empty array, never null. `severity` is `critical` for all three V1 conditions |
 
-**`errors_last_window` counts one failure once.** It counts `sender.job_events` rows in the window
+**`errors_last_window` counts one failure once.** It counts `send_managed.job_events` rows in the window
 that are *error transitions* — a terminal `failed` or `bounced`, or a **requeue** (a non-genesis
 transition back to `queued`). Forward progress (`queued→assigned`, `assigned→sending`) and success
 (`sending→sent`) are never counted, so the number is a count of *failures*, not of rows that happen to
 carry a class. Read it as incident size: one failing send contributes exactly 1, no matter how many
 times that job is later retried and eventually succeeds.
 
-> Until `sender_0022` this was not true. `sender_0008`'s triggers copied the job row's **sticky**
+> Until `send_managed_0022` this was not true. `send_managed_0008`'s triggers copied the job row's **sticky**
 > `last_error_class` onto every event, so a single requeue tagged four rows — the requeue plus the
 > `queued→assigned`, `assigned→sending`, and `sending→sent` that followed — and this field reported
-> `{"unknown": 4}` for one failure. `sender_0022` gates the trigger; `queryErrorsInWindow` also filters
+> `{"unknown": 4}` for one failure. `send_managed_0022` gates the trigger; `queryErrorsInWindow` also filters
 > on the transition shape, so the count is correct even over rows an older trigger already wrote
 > (`job_events` is append-only and was deliberately not rewritten). Note the two-sided consequence: a
-> database still carrying pre-`sender_0022` rows returns the correct count from this endpoint, but a
+> database still carrying pre-`send_managed_0022` rows returns the correct count from this endpoint, but a
 > **hand-written** `COUNT(*) WHERE error_class IS NOT NULL` against `job_events` will still over-count
 > on those old rows. Filter on the transition shape in ad-hoc queries too. Pinned by
 > `TestHealth_ErrorsLastWindowCountsOnlyErrorTransitions` and
@@ -245,9 +245,9 @@ a receiver depends on. Fires on the **rising edge** of a condition, deduped by
 
 | Field | Type | Notes |
 |---|---|---|
-| `condition` | string | `pool_exhausted` \| `account_quarantined` \| `box_death` |
+| `condition` | string | `pool_exhausted` \| `account_quarantined` \| `worker_death` |
 | `severity` | string | `critical` |
-| `subject` | object | `{type, id}` — the id of the pool / account / box the condition is about |
+| `subject` | object | `{type, id}` — the id of the pool / account / worker the condition is about |
 | `detail` | object | condition-specific counts and ids only |
 | `fired_at` | string (RFC 3339 UTC) | rising-edge timestamp |
 | `module` | string | constant module identifier, so a shared receiver can route |
@@ -264,12 +264,12 @@ The end-user surface for the minimal send path. Every route requires the platfor
 (`Authorization: Bearer <token>`, hashed + constant-time; distinct from the operator key).
 Missing/invalid token → `401 unauthenticated`. The surface only mounts when `PLATFORM_TOKEN_HASHES`
 is configured (fail-closed). Error envelopes carry ONLY `{code, message, details[], request_id}` —
-never SMTP text, the box's `error_reason`, an internal reason, SQL/SQLSTATE, a credential, or an
+never SMTP text, the worker's `error_reason`, an internal reason, SQL/SQLSTATE, a credential, or an
 internal hostname (two-vocabulary rule). Additive-only: these routes never rename; later phases add.
 
 > **Per-tenant isolation is ENFORCED (OD-25, RULED option b).** Every platform request carries an
 > explicit tenant selector — `user_id` (a UUID): `run` in the body, `report` in the query. The
-> module scopes every `sender.jobs` read/write `WHERE user_id = <tenant>`. A `run` for a
+> module scopes every `send_managed.jobs` read/write `WHERE user_id = <tenant>`. A `run` for a
 > `job_item_id` **owned by another tenant**, or a `report` for a `job_id`/`job_item_id` belonging to
 > another tenant, returns the SAME `404 not_found` as a non-existent id (never `403`) — so a caller
 > can neither read nor confirm the existence of another tenant's jobs. "The same" means the same
@@ -284,12 +284,12 @@ internal hostname (two-vocabulary rule). Additive-only: these routes never renam
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/v1/quote` | recipient count → cost (Phase 9 §1, finalized: `cost = recipient_count × unit_price_credits`, unit read LIVE from `sender.config`) — response adds the additive `unit_price_credits`/`tier` fields so the platform's preview/confirm-cost step can show the caller why the number is what it is; pure, side-effect-free, idempotent — reserves nothing and creates no job. **`recipient_count` rejections are distinguishable** (see the `details[]` note above): absent/`null` → `required`; present-but-negative → `out_of_range`; wrong JSON type → `malformed` naming the field. `0` is a VALID count (`cost: 0`), not a rejection |
-| POST | `/v1/run` | accept a job — body `{job_item_id, user_id}` (both UUIDs; `user_id` = owning tenant, REQUIRED) → create one `sender.jobs` row, return `202` immediately (async kickoff; never blocks on the send). The `job_item_id` must belong to `user_id` (else `404 not_found`). Duplicate `job_item_id` for the same tenant → clean `200` with the existing job (idempotent; never a raw `23505`). **One active campaign per user (Phase 4 §8, P4-7):** if `user_id` already has a DIFFERENT campaign active (any non-terminal job), the run is rejected outright with `409 conflict` (internal reason `user_campaign_active`) and creates ZERO job rows — enforced under a per-user Postgres advisory lock so concurrent attempts are genuinely serialized, not racy |
-| GET | `/v1/report` | reflect a job's state — `?user_id=<uuid>` (REQUIRED tenant selector) plus `?job_id=` or `?job_item_id=`: returns `state`, `provider_message_id` (when `sent`), `completed_at`, `attempt_count` — clean external state only. **`provider_message_id`/`completed_at` are OMITTED (key absent, not `null`) until set** — a UI must check for key presence, not for `null`, on this single-job shape. A job owned by another tenant → `404 not_found` (no existence disclosure). **Phase 5 (§5.4):** a job WAITING for capacity — its only accounts self-recovering (throttle/daily-limit paused), or an unconfigured shared-pool chain — reads as clean pending `state:"queued"` (never `failed`, never an error, even if it waits until the next daily reset); a job whose entire resolved pool is truly exhausted (all accounts quarantined/disabled/manual-paused) reads `state:"failed"`. The internal reason (`pool_exhausted`, which accounts, why) is NEVER surfaced — two-vocabulary rule. **Phase 6 (§2):** a job RECLAIMED from a dead/hung box (heartbeat-miss or lease-expiry) returns to clean pending `state:"queued"` with an incremented `attempt_count` (saturating) — the internal reclaim reason (`box heartbeat missed`/`lease expired`, `actor='reclaim_loop'`) stays internal and is never surfaced; a persistently-reclaimed job never fails by attempt count (it fails only on true pool exhaustion, §2.5). **B8 (Phase 9 contract completion) — `?campaign_id=<uuid>` mode:** when `campaign_id` is present (instead of `job_id`/`job_item_id`), `report` returns the CAMPAIGN-scoped aggregate shape below rather than the single-job shape. |
+| POST | `/v1/quote` | recipient count → cost (Phase 9 §1, finalized: `cost = recipient_count × unit_price_credits`, unit read LIVE from `send_managed.config`) — response adds the additive `unit_price_credits`/`tier` fields so the platform's preview/confirm-cost step can show the caller why the number is what it is; pure, side-effect-free, idempotent — reserves nothing and creates no job. **`recipient_count` rejections are distinguishable** (see the `details[]` note above): absent/`null` → `required`; present-but-negative → `out_of_range`; wrong JSON type → `malformed` naming the field. `0` is a VALID count (`cost: 0`), not a rejection |
+| POST | `/v1/run` | accept a job — body `{job_item_id, user_id}` (both UUIDs; `user_id` = owning tenant, REQUIRED) → create one `send_managed.jobs` row, return `202` immediately (async kickoff; never blocks on the send). The `job_item_id` must belong to `user_id` (else `404 not_found`). Duplicate `job_item_id` for the same tenant → clean `200` with the existing job (idempotent; never a raw `23505`). **One active campaign per user (Phase 4 §8, P4-7):** if `user_id` already has a DIFFERENT campaign active (any non-terminal job), the run is rejected outright with `409 conflict` (internal reason `user_campaign_active`) and creates ZERO job rows — enforced under a per-user Postgres advisory lock so concurrent attempts are genuinely serialized, not racy |
+| GET | `/v1/report` | reflect a job's state — `?user_id=<uuid>` (REQUIRED tenant selector) plus `?job_id=` or `?job_item_id=`: returns `state`, `provider_message_id` (when `sent`), `completed_at`, `attempt_count` — clean external state only. **`provider_message_id`/`completed_at` are OMITTED (key absent, not `null`) until set** — a UI must check for key presence, not for `null`, on this single-job shape. A job owned by another tenant → `404 not_found` (no existence disclosure). **Phase 5 (§5.4):** a job WAITING for capacity — its only accounts self-recovering (throttle/daily-limit paused), or an unconfigured shared-pool chain — reads as clean pending `state:"queued"` (never `failed`, never an error, even if it waits until the next daily reset); a job whose entire resolved pool is truly exhausted (all accounts quarantined/disabled/manual-paused) reads `state:"failed"`. The internal reason (`pool_exhausted`, which accounts, why) is NEVER surfaced — two-vocabulary rule. **Phase 6 (§2):** a job RECLAIMED from a dead/hung worker (heartbeat-miss or lease-expiry) returns to clean pending `state:"queued"` with an incremented `attempt_count` (saturating) — the internal reclaim reason (`worker heartbeat missed`/`lease expired`, `actor='reclaim_loop'`) stays internal and is never surfaced; a persistently-reclaimed job never fails by attempt count (it fails only on true pool exhaustion, §2.5). **B8 (Phase 9 contract completion) — `?campaign_id=<uuid>` mode:** when `campaign_id` is present (instead of `job_id`/`job_item_id`), `report` returns the CAMPAIGN-scoped aggregate shape below rather than the single-job shape. |
 
 **B8 — the campaign-scoped `report` response** (`GET /v1/report?campaign_id=<uuid>&user_id=<uuid>`),
-derived ENTIRELY from `sender.jobs` state counts + existing per-job fields — no new state, no
+derived ENTIRELY from `send_managed.jobs` state counts + existing per-job fields — no new state, no
 schema change:
 
 ```jsonc
@@ -351,79 +351,79 @@ back to the default (never a `400`). `cursor` is opaque (base64) — pass back e
 means the last page.
 | GET | `/v1/describe` | module self-description (Phase 9 §2, finalized): `capabilities` (honest — `sequences:false`, no tracking, `content_variation:true`) + `pricing` (`unit_price_credits` — the SAME live value `quote` multiplies by — and `tiers` — `shared`/`dedicated`, the one real V1 axis, **identical unit price in V1**; dedicated is isolation, not a premium) |
 
-> The box↔Brain send channel is a THIRD, internal machine-to-machine channel (mTLS, box-initiated
-> persistent stream on the boxlink stream port) carrying
+> The worker↔Control send channel is a THIRD, internal machine-to-machine channel (mTLS, worker-initiated
+> persistent stream on the workerlink stream port) carrying
 > `register`/`register_ack`/`heartbeat`/`push_job`/`report`/`report_ack`. It is not a platform-facing
 > HTTP route and is not part of this contract surface; its security properties are covered by the
 > Phase 3 spec (§2/§3) and the behavioral suite.
 >
 > **Phase 7 (§1.3, P7-4) — the outcome persist-ack contract (additive frame `report_ack`).** The
-> Brain sends `report_ack {job_id, request_id, accepted}` back to the box ONLY AFTER the reported
-> outcome is durably committed to the DB (or determined a clean idempotent no-op the Brain already
-> owns). Until it receives that ack, the box RETAINS the outcome and replays it on (re)connection,
-> bounded by `box_outcome_buffer_ttl_sec`. One mechanism covers stream-drop, Brain-restart, and
+> Control sends `report_ack {job_id, request_id, accepted}` back to the worker ONLY AFTER the reported
+> outcome is durably committed to the DB (or determined a clean idempotent no-op the Control already
+> owns). Until it receives that ack, the worker RETAINS the outcome and replays it on (re)connection,
+> bounded by `box_outcome_buffer_ttl_sec`. One mechanism covers stream-drop, Control-restart, and
 > DB-outage recovery: no outcome is lost to a blip, and idempotency (`provider_message_id UNIQUE` +
 > the pre-persist check) makes a replay a no-op, never a duplicate. Two-vocabulary: the ack carries
-> only `{job_id, request_id, accepted}` — never an internal reason. The Brain NEVER acks an outcome
+> only `{job_id, request_id, accepted}` — never an internal reason. The Control NEVER acks an outcome
 > it did not persist (Rule 5).
 >
 > **Phase 8 Chunk 1 (P7-OD-6) — per-attempt identity (additive wire field `attempt_token`).** Both
-> `push_job` and `report` carry an additive integer `attempt_token`. The Brain mints it inside the
-> guarded `assigned → sending` transition (`sender.jobs.attempt_token`, migration `sender_0020`:
-> monotonic, NON-saturating, one increment per dispatched attempt) and the box echoes it back
-> VERBATIM — the box never mints, defaults, or increments one. The Brain REJECTS a report whose token
+> `push_job` and `report` carry an additive integer `attempt_token`. The Control mints it inside the
+> guarded `assigned → sending` transition (`send_managed.jobs.attempt_token`, migration `send_managed_0020`:
+> monotonic, NON-saturating, one increment per dispatched attempt) and the worker echoes it back
+> VERBATIM — the worker never mints, defaults, or increments one. The Control REJECTS a report whose token
 > is a PROVABLE mismatch with the job's current attempt (both values non-zero and different): the report
-> is acked (so the box stops replaying a permanently-inapplicable outcome) but applies NOTHING — no
+> is acked (so the worker stops replaying a permanently-inapplicable outcome) but applies NOTHING — no
 > state change, no `send_logs` row, no `job_events` row, no account scoring. This closes the case the
-> Phase 7 box-attribution guard could not decide: a stale buffered outcome from attempt 1 replayed
-> after the job was reclaimed and re-dispatched to the SAME box. An absent or zero token on either
-> side is treated as UNKNOWN, never a mismatch, so a box or job row that predates the field degrades
+> Phase 7 worker-attribution guard could not decide: a stale buffered outcome from attempt 1 replayed
+> after the job was reclaimed and re-dispatched to the SAME worker. An absent or zero token on either
+> side is treated as UNKNOWN, never a mismatch, so a worker or job row that predates the field degrades
 > to exactly Phase 7 behavior rather than having legitimate outcomes discarded. Two-vocabulary is
-> unchanged: the token is an internal machine-to-machine identifier on the box channel and is never
+> unchanged: the token is an internal machine-to-machine identifier on the worker channel and is never
 > surfaced on any client boundary (`/v1/report` still returns only clean external state).
 >
 > **Phase 8 Chunk 2 (§2.2, P8-2/P8-3) — the additive `variation` block on `push_job`.** `push_job`
-> gains one optional field, `variation`: the Brain's RESOLVED content-variation toggle snapshot
-> (plain booleans/strings/arrays — no `sender.config` shape, no logic) for the box's MIME-assembly
-> pipeline to apply. It is per-job-fresh (the Brain builds it fresh for every `push_job`, never
+> gains one optional field, `variation`: the Control's RESOLVED content-variation toggle snapshot
+> (plain booleans/strings/arrays — no `send_managed.config` shape, no logic) for the worker's MIME-assembly
+> pipeline to apply. It is per-job-fresh (the Control builds it fresh for every `push_job`, never
 > cached) and GLOBAL in V1 (one operator-owned toggle set applied to every send, §3). The block is
 > ABSENT, or present with every field at its documented neutral default, exactly when Phase 3
-> behavior is intended: the box's variation layer is then the IDENTITY FUNCTION and the bytes it
-> puts on the wire are byte-for-byte the Phase 3 output (the headline safety property, §4). The box
-> never reads `sender.config` and holds no variation state across jobs — it applies exactly the
+> behavior is intended: the worker's variation layer is then the IDENTITY FUNCTION and the bytes it
+> puts on the wire are byte-for-byte the Phase 3 output (the headline safety property, §4). The worker
+> never reads `send_managed.config` and holds no variation state across jobs — it applies exactly the
 > values this block carries. Two-vocabulary is unchanged: the block carries no credential, no
 > internal reason string, and never appears on any client-facing boundary. Chunk 2 shipped the wire
-> shape and the box-side identity-function pipeline with the Brain stamping a literal Phase-3-neutral
-> snapshot (no `sender.config` row existed yet for these keys); Chunk 5 seeded the toggle/intensity
-> keys into `sender_0020` and switched the Brain to read them for real — this wire contract did not
+> shape and the worker-side identity-function pipeline with the Control stamping a literal Phase-3-neutral
+> snapshot (no `send_managed.config` row existed yet for these keys); Chunk 5 seeded the toggle/intensity
+> keys into `send_managed_0020` and switched the Control to read them for real — this wire contract did not
 > change when it did. **Amended 2026-07-26 (P8-OD-1 RULED-WIDEN):** the block gained three additional
 > fields (`css_magnitude_px`, `zero_width_rate`, `user_agent_rate`), promoting what were fixed-in-code
 > rates/magnitudes to operator-tunable parameters; those three fields deliberately omit `omitempty`
-> so an operator-set value of exactly `0` reaches the box as a real `0` rather than collapsing to the
-> box's own internal default via the omitted-field fallback. Growing `sender_0020` from fourteen keys
+> so an operator-set value of exactly `0` reaches the worker as a real `0` rather than collapsing to the
+> worker's own internal default via the omitted-field fallback. Growing `send_managed_0020` from fourteen keys
 > to seventeen.
 >
 > **Amended 2026-07-26 (Phase 9.5 S11, §2.4, P9.5-OD-3 RULED) — two more additive fields:**
 > `comment_intensity_rates` (object `{low,medium,high}`, percent 0–100 — the per-bucket comment-
-> injection rate table, replacing the box's own hardcoded `{low:5,medium:15,high:30}`) and
+> injection rate table, replacing the worker's own hardcoded `{low:5,medium:15,high:30}`) and
 > `css_skip_below_px` (integer, `omitempty` — the px value below which `css_micro` leaves a
-> padding/margin declaration untouched, replacing the box's own hardcoded `<3px`). **P9.5-OD-3**
-> (recorded in `Docs/history/open-decisions.md`): `sender_0021`'s `variation_zero_width_rate_pct` and
+> padding/margin declaration untouched, replacing the worker's own hardcoded `<3px`). **P9.5-OD-3**
+> (recorded in `Docs/history/open-decisions.md`): `send_managed_0021`'s `variation_zero_width_rate_pct` and
 > `variation_css_micro_params.delta_px` are documented DUPLICATES of the already-wired
 > `variation_zero_width_rate`/`variation_css_magnitude_px` (P8-OD-1) under a different unit/shape —
 > ruled to wire only the two genuinely-new sub-values (the rate table, the skip-below threshold) onto
 > the existing keys' already-established delivery mechanism, and leave the two duplicate parameters
-> unconsumed rather than introduce a second, competing source of truth for the same box behavior.
+> unconsumed rather than introduce a second, competing source of truth for the same worker behavior.
 
 ## What is NOT part of the public REST contract
 
-The box↔Brain protocol (mTLS channel, `register`/`register_ack`/`heartbeat`/`push_job`/`report`/
+The worker↔Control protocol (mTLS channel, `register`/`register_ack`/`heartbeat`/`push_job`/`report`/
 `report_ack`, including the additive `variation`/`attempt_token`/`smtp.operation_timeout_sec`
 fields documented above) is internal machine-to-machine wire format. It is **not** part of either
 public surface (Domain A or Domain B) and evolves independently of the additive-only REST
-versioning rule — a wire field can be added the moment the Brain and box images that use it are
+versioning rule — a wire field can be added the moment the Control and worker images that use it are
 both deployed, with no coordination against `quote`/`run`/`report`/`describe` or `/v1/admin/*`.
-None of `quote`/`run`/`report`/`describe`/`/v1/admin/*` ever return a box-protocol field verbatim.
+None of `quote`/`run`/`report`/`describe`/`/v1/admin/*` ever return a worker-protocol field verbatim.
 
 ## S9 — `send_logs` at-rest governance (Phase 9 contract completion, documentation only)
 

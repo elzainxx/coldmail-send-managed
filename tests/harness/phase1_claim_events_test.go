@@ -17,13 +17,13 @@ import (
 // except LIMIT is parameterized. FOR UPDATE SKIP LOCKED => exactly one claimer wins each row.
 const claimQuery = `
 WITH claimed AS (
-    SELECT id FROM sender.jobs
+    SELECT id FROM send_managed.jobs
     WHERE state = 'queued' AND next_attempt_at <= NOW()
     ORDER BY next_attempt_at ASC, created_at ASC
     FOR UPDATE SKIP LOCKED
     LIMIT $1
 )
-UPDATE sender.jobs
+UPDATE send_managed.jobs
 SET state = 'assigned',
     lease_expires_at = NOW() + INTERVAL '120 seconds',
     updated_at = NOW()
@@ -39,7 +39,7 @@ func claimOnce(ctx context.Context, c *pgx.Conn, limit int) ([]string, error) {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, "SELECT set_config('sender.actor', 'dispatcher', true)"); err != nil {
+	if _, err := tx.Exec(ctx, "SELECT set_config('send_managed.actor', 'dispatcher', true)"); err != nil {
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, claimQuery, limit)
@@ -84,7 +84,7 @@ func TestT1_ConcurrentClaimExactlyOneWinner(t *testing.T) {
 
 	// Anti-vacuity precondition: the job is genuinely 'queued' before the race.
 	var pre string
-	if err := seed.QueryRow(ctx, "SELECT state FROM sender.jobs WHERE id=$1", jobID).Scan(&pre); err != nil {
+	if err := seed.QueryRow(ctx, "SELECT state FROM send_managed.jobs WHERE id=$1", jobID).Scan(&pre); err != nil {
 		t.Fatalf("pre state: %v", err)
 	}
 	if pre != "queued" {
@@ -127,7 +127,7 @@ func TestT1_ConcurrentClaimExactlyOneWinner(t *testing.T) {
 
 	// Post-state: the job is 'assigned' exactly once (not double-claimed, not left queued).
 	var post string
-	if err := seed.QueryRow(ctx, "SELECT state FROM sender.jobs WHERE id=$1", jobID).Scan(&post); err != nil {
+	if err := seed.QueryRow(ctx, "SELECT state FROM send_managed.jobs WHERE id=$1", jobID).Scan(&post); err != nil {
 		t.Fatalf("post state: %v", err)
 	}
 	if post != "assigned" {
@@ -218,7 +218,7 @@ func TestT1b_NWorkersMJobsEachClaimedOnce(t *testing.T) {
 
 	// Post-state: all M jobs are 'assigned'.
 	var assignedCount int
-	if err := seed.QueryRow(ctx, "SELECT count(*) FROM sender.jobs WHERE state='assigned'").Scan(&assignedCount); err != nil {
+	if err := seed.QueryRow(ctx, "SELECT count(*) FROM send_managed.jobs WHERE state='assigned'").Scan(&assignedCount); err != nil {
 		t.Fatalf("count assigned: %v", err)
 	}
 	if assignedCount != M {
@@ -239,7 +239,7 @@ func TestT2_EventPerTransition(t *testing.T) {
 	c := Connect(t, cloneDSN)
 	uid := SeedUser(t, c, "t2@example.com")
 	poolID := SeedSharedPool(t, c, uid, "t2-pool")
-	boxID := SeedBox(t, c, uid)                                     // real box for provenance propagation
+	workerID := SeedWorker(t, c, uid)                                     // real worker for provenance propagation
 	acctID := SeedAccount(t, c, uid, poolID)                        // real account for provenance propagation
 	jobID := InsertQueuedJob(t, c, uid, uid, "rcpt-t2@example.com") // genesis event written
 
@@ -251,41 +251,41 @@ func TestT2_EventPerTransition(t *testing.T) {
 	// Each transition in its own tx with the actor GUC (sanctioned path). The assigned
 	// transition sets a REAL assigned_box_id so we can assert provenance propagation below.
 	transition(t, c, jobID, "dispatcher",
-		"UPDATE sender.jobs SET state='assigned', assigned_box_id='"+boxID+"', lease_expires_at=NOW()+INTERVAL '120 seconds' WHERE id=$1")
+		"UPDATE send_managed.jobs SET state='assigned', assigned_box_id='"+workerID+"', lease_expires_at=NOW()+INTERVAL '120 seconds' WHERE id=$1")
 	if got := eventCount(t, c, jobID); got != 2 {
 		t.Fatalf("after assigned: %d events, want 2", got)
 	}
-	// Provenance: the assigned event captured the box the job was assigned to (04-event-log.md
+	// Provenance: the assigned event captured the worker the job was assigned to (04-event-log.md
 	// "complete provenance"). This guards against a trigger refactor dropping the box_id copy.
-	var evBox string
-	if err := c.QueryRow(ctx, "SELECT box_id::text FROM sender.job_events WHERE job_id=$1 AND to_state='assigned'", jobID).Scan(&evBox); err != nil {
+	var evWorker string
+	if err := c.QueryRow(ctx, "SELECT box_id::text FROM send_managed.job_events WHERE job_id=$1 AND to_state='assigned'", jobID).Scan(&evWorker); err != nil {
 		t.Fatalf("read assigned event box_id: %v", err)
 	}
-	if evBox != boxID {
-		t.Fatalf("assigned event box_id=%s, want %s (provenance not propagated)", evBox, boxID)
+	if evWorker != workerID {
+		t.Fatalf("assigned event box_id=%s, want %s (provenance not propagated)", evWorker, workerID)
 	}
 	transition(t, c, jobID, "box",
-		"UPDATE sender.jobs SET state='sending', assigned_account_id='"+acctID+"' WHERE id=$1")
+		"UPDATE send_managed.jobs SET state='sending', assigned_account_id='"+acctID+"' WHERE id=$1")
 	if got := eventCount(t, c, jobID); got != 3 {
 		t.Fatalf("after sending: %d events, want 3", got)
 	}
 	// Provenance: the sending event captured the account.
 	var evAcct string
-	if err := c.QueryRow(ctx, "SELECT account_id::text FROM sender.job_events WHERE job_id=$1 AND to_state='sending'", jobID).Scan(&evAcct); err != nil {
+	if err := c.QueryRow(ctx, "SELECT account_id::text FROM send_managed.job_events WHERE job_id=$1 AND to_state='sending'", jobID).Scan(&evAcct); err != nil {
 		t.Fatalf("read sending event account_id: %v", err)
 	}
 	if evAcct != acctID {
 		t.Fatalf("sending event account_id=%s, want %s (provenance not propagated)", evAcct, acctID)
 	}
 	transition(t, c, jobID, "box",
-		"UPDATE sender.jobs SET state='sent', provider_message_id='250-OK-t2', lease_expires_at=NULL, completed_at=NOW() WHERE id=$1")
+		"UPDATE send_managed.jobs SET state='sent', provider_message_id='250-OK-t2', lease_expires_at=NULL, completed_at=NOW() WHERE id=$1")
 	if got := eventCount(t, c, jobID); got != 4 {
 		t.Fatalf("after sent: %d events, want 4", got)
 	}
 
 	// Chronological correctness + unique seq.
 	rows, err := c.Query(ctx,
-		"SELECT COALESCE(from_state::text,'NULL'), to_state::text, actor::text, seq FROM sender.job_events WHERE job_id=$1 ORDER BY seq", jobID)
+		"SELECT COALESCE(from_state::text,'NULL'), to_state::text, actor::text, seq FROM send_managed.job_events WHERE job_id=$1 ORDER BY seq", jobID)
 	if err != nil {
 		t.Fatalf("query events: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestT3_NoStateChangeWithoutEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	_, execErr := tx.Exec(ctx, "UPDATE sender.jobs SET state='assigned', lease_expires_at=NOW()+INTERVAL '120 seconds' WHERE id=$1", jobID)
+	_, execErr := tx.Exec(ctx, "UPDATE send_managed.jobs SET state='assigned', lease_expires_at=NOW()+INTERVAL '120 seconds' WHERE id=$1", jobID)
 	_ = tx.Rollback(ctx)
 	if execErr == nil {
 		t.Fatal("expected the no-actor UPDATE to be rejected by the trigger, got nil error")
@@ -349,7 +349,7 @@ func TestT3_NoStateChangeWithoutEvent(t *testing.T) {
 
 	// State unchanged (still queued), event count still 1 (genesis only).
 	var state string
-	if err := c.QueryRow(ctx, "SELECT state FROM sender.jobs WHERE id=$1", jobID).Scan(&state); err != nil {
+	if err := c.QueryRow(ctx, "SELECT state FROM send_managed.jobs WHERE id=$1", jobID).Scan(&state); err != nil {
 		t.Fatalf("state after reject: %v", err)
 	}
 	if state != "queued" {
@@ -361,8 +361,8 @@ func TestT3_NoStateChangeWithoutEvent(t *testing.T) {
 
 	// POSITIVE control: same UPDATE WITH the actor GUC succeeds and writes exactly one event.
 	transition(t, c, jobID, "dispatcher",
-		"UPDATE sender.jobs SET state='assigned', lease_expires_at=NOW()+INTERVAL '120 seconds' WHERE id=$1")
-	if err := c.QueryRow(ctx, "SELECT state FROM sender.jobs WHERE id=$1", jobID).Scan(&state); err != nil {
+		"UPDATE send_managed.jobs SET state='assigned', lease_expires_at=NOW()+INTERVAL '120 seconds' WHERE id=$1")
+	if err := c.QueryRow(ctx, "SELECT state FROM send_managed.jobs WHERE id=$1", jobID).Scan(&state); err != nil {
 		t.Fatalf("state after control: %v", err)
 	}
 	if state != "assigned" {
@@ -391,7 +391,7 @@ func templateDB() string {
 func eventCount(t *testing.T, c *pgx.Conn, jobID string) int {
 	t.Helper()
 	var n int
-	if err := c.QueryRow(context.Background(), "SELECT count(*) FROM sender.job_events WHERE job_id=$1", jobID).Scan(&n); err != nil {
+	if err := c.QueryRow(context.Background(), "SELECT count(*) FROM send_managed.job_events WHERE job_id=$1", jobID).Scan(&n); err != nil {
 		t.Fatalf("event count: %v", err)
 	}
 	return n
@@ -407,7 +407,7 @@ func transition(t *testing.T, c *pgx.Conn, jobID, actor, updateSQL string) {
 		t.Fatalf("begin: %v", err)
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, "SELECT set_config('sender.actor', $1, true)", actor); err != nil {
+	if _, err := tx.Exec(ctx, "SELECT set_config('send_managed.actor', $1, true)", actor); err != nil {
 		t.Fatalf("set actor: %v", err)
 	}
 	if _, err := tx.Exec(ctx, updateSQL, jobID); err != nil {

@@ -1,5 +1,5 @@
 # ── Secrets & key material — NEVER committed ────────────────────────────────
-# Private keys use the .key extension (ca.key, brain.key, box-<id>.key, sink.key)
+# Private keys use the .key extension (ca.key, control.key, worker-<id>.key, sink.key)
 # and the harness generates ephemeral certs OUTSIDE secrets/, so cover every location.
 *.key
 *.pem
@@ -14,21 +14,21 @@ deploy/certs/
 !.env.example
 !.env.ci
 
-# ── Go (Brain) ──────────────────────────────────────────────────────────────
-/services/brain/bin/
-/tools/sender-migrate/bin/
-/tools/provision-box/bin/
-**/bin/sender-migrate
-**/bin/provision-box
+# ── Go (Control) ──────────────────────────────────────────────────────────────
+/services/control/bin/
+/tools/send-managed-migrate/bin/
+/tools/provision-worker/bin/
+**/bin/send-managed-migrate
+**/bin/provision-worker
 *.exe
 *.out
 *.test
 
-# ── Node (box) ──────────────────────────────────────────────────────────────
+# ── Node (worker) ──────────────────────────────────────────────────────────────
 node_modules/
 npm-debug.log*
 *.tsbuildinfo
-/services/box/dist/
+/services/worker/dist/
 
 # ── misc ────────────────────────────────────────────────────────────────────
 .DS_Store

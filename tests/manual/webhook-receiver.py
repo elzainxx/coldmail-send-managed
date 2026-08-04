@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """webhook-receiver.py — a logging sink for alert_webhook_url, on the compose network.
 
-WHY THIS IS TRACKED. Stage 10 step 7 of Docs/sender-module-local-test-guide.md requires proving the
+WHY THIS IS TRACKED. Stage 10 step 7 of Docs/coldmail-send-managed-local-test-guide.md requires proving the
 alert webhook actually FIRES, not merely that active_conditions[] lists a condition. That needs an
-HTTP endpoint the Brain container can resolve — `localhost` from the host is not reachable from
-inside the Brain, so the receiver has to live on `sender-module_default`. Doing that with an ad-hoc
+HTTP endpoint the Control container can resolve — `localhost` from the host is not reachable from
+inside the Control, so the receiver has to live on `coldmail-send-managed_default`. Doing that with an ad-hoc
 inline heredoc failed twice on Windows (Git Bash rewrote the container-side mount path, then Docker
 Desktop mounted a /tmp file as an empty directory), so it lives in the repo where a bind mount from
 the project directory works.
@@ -17,7 +17,7 @@ it carries only condition codes, subject ids, and timestamps.
 
 Run it (from the repo root):
 
-    docker run -d --name s10hook --network sender-module_default \
+    docker run -d --name s10hook --network coldmail-send-managed_default \
       -v "$(pwd)/tests/manual:/rcv:ro" python:3.12-alpine python /rcv/webhook-receiver.py
 
 then set alert_webhook_url to http://s10hook:9099/hook and read `docker logs s10hook`.

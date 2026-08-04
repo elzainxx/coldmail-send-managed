@@ -1,7 +1,7 @@
-# CLAUDE.md — Operating Rules (Module 2, Email Sender)
+# CLAUDE.md — Operating Rules (Module 2, Email SendManaged)
 
 This file is the /init anchor and the single source of build discipline for this
-repository (one repo; Go "Brain" orchestrator + Node.js "Sender Boxes" + centrally
+repository (one repo; Go "Control" orchestrator + Node.js "SendManaged Workers" + centrally
 owned SQL migrations). Read it before writing code, tests, migrations, or docs.
 These rules are NON-NEGOTIABLE and outlive any individual phase. If a task appears
 to require breaking one, STOP and file an Open Decision (Rule 2) — do not proceed.
@@ -14,7 +14,7 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
 
 ## 1. Config not code
 - Every tunable — timeout, window, limit, batch size, interval, mode — is a seeded
-  row in `sender.config` with a documented `default_value` and a `value_type` hint.
+  row in `send_managed.config` with a documented `default_value` and a `value_type` hint.
   Values are JSONB-wrapped `{"v": ...}`. There are NO hardcoded tuning constants in
   Go, Node, or SQL. A literal that governs runtime behavior is a bug.
 - `default_value` is never mutated. Phase 9 §4 is the authoritative 50-key reference.
@@ -27,9 +27,9 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
   `config_ordering_violation` (Phase 7 §5.3 authoritative). Do not "clamp" or
   auto-correct — reject.
 - The ONE narrow, documented exception: the migration runner's own `lock_timeout` /
-  `statement_timeout` are CLI-flag defaults, because `sender.config` does not exist
+  `statement_timeout` are CLI-flag defaults, because `send_managed.config` does not exist
   until the bootstrap migration creates it. This exception is the runner only — never
-  Brain/box runtime behavior.
+  Control/worker runtime behavior.
 
 ## 2. Flag, don't silently fix
 - Contradictions, ambiguities, and locked-fact conflicts are NOT resolved by
@@ -40,7 +40,7 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
 
 ## 3. Real behavioral tests only
 - Tests exercise real behavior against real infrastructure (real Postgres, real
-  Brain<->box channel). NO syntax-only tests. NO mock-the-DB / mock-the-box tests
+  Control<->worker channel). NO syntax-only tests. NO mock-the-DB / mock-the-worker tests
   standing in for behavior.
 - This is absolute for: claim/consume (exactly-once job pickup), idempotency
   (no double-send under retry/replay), and the job state machine
@@ -71,31 +71,31 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
   trust boundary and is subject to the same two-vocabulary rule: its payload carries
   ONLY condition codes, subject ids, and timestamps — never send content, credentials,
   internal reasons, SQL, or internal hostnames.
-- Never invent an outcome the box did not report. If the box did not confirm a
+- Never invent an outcome the worker did not report. If the worker did not confirm a
   send/failure/bounce, the system does not claim one. No optimistic fabrication.
 
 ## 6. Load-bearing security properties (never weakened)
-- Brain is the SOLE decryptor. KMS Decrypt is Brain-only. The platform and operators
+- Control is the SOLE decryptor. KMS Decrypt is Control-only. The platform and operators
   hold NO Decrypt capability. Do not add one.
-- The box holds SMTP credentials in MEMORY ONLY and zeroes them on EVERY exit path
+- The worker holds SMTP credentials in MEMORY ONLY and zeroes them on EVERY exit path
   (success, error, panic, shutdown, timeout). A credential is never logged, never
   persisted, never serialized to a client.
-- The box has NO DB access and NO KMS access. Ever. It talks only to Brain. This is
-  structural: the box service ships no DB driver and no KMS SDK, and its container
+- The worker has NO DB access and NO KMS access. Ever. It talks only to Control. This is
+  structural: the worker service ships no DB driver and no KMS SDK, and its container
   mounts neither DB credentials nor KMS key material.
-- The box<->Brain channel is mutual-TLS (mTLS). Do not downgrade or bypass.
+- The worker<->Control channel is mutual-TLS (mTLS). Do not downgrade or bypass.
 - SMTP: STARTTLS-before-AUTH on ports 587/25; implicit TLS on 465. AUTH never
   precedes TLS.
-- Box authorization authority is the registration token (hash seeded in
-  sender.boxes.token_hash; plaintext never stored); the client cert is transport
-  auth/confidentiality. A decommissioned box (token_hash cleared/rotated) is refused
+- Worker authorization authority is the registration token (hash seeded in
+  send_managed.boxes.token_hash; plaintext never stored); the client cert is transport
+  auth/confidentiality. A decommissioned worker (token_hash cleared/rotated) is refused
   on next connect regardless of cert.
 - Auth domains never share a credential: Domain A = platform service token
   (quote/run/report/describe); Domain B = operator platform_admin bearer key
   (stored hashed, constant-time compared) for /v1/admin/*.
-- The `sender` schema is owned by a dedicated NON-LOGIN, NON-SUPERUSER role
-  (`sender_owner`) so that `FORCE ROW LEVEL SECURITY` on `sender.accounts` actually
-  enforces. The app role `sender_module` is login-only and holds the enumerated grants,
+- The `send_managed` schema is owned by a dedicated NON-LOGIN, NON-SUPERUSER role
+  (`send_managed_owner`) so that `FORCE ROW LEVEL SECURITY` on `send_managed.accounts` actually
+  enforces. The app role `send_managed_app` is login-only and holds the enumerated grants,
   never ownership.
 
 ## 7. Autonomous-subsystem safety controls are respected
@@ -109,7 +109,7 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
     - autopause_enabled           (default true)
     - variation_enabled           (default true)
     - alert_webhook_url           ("" = alerting off)
-- Brain runs as a SINGLETON guarded by a session-level Postgres advisory lock on a
+- Control runs as a SINGLETON guarded by a session-level Postgres advisory lock on a
   fixed key, acquired at startup with bounded wait
   (brain_singleton_acquire_timeout_sec) then fail. SIGKILL auto-releases it (no stale
   lock). Never add a second dispatch path or distributed dispatch.
@@ -125,11 +125,11 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
 
 ## 9. Account→job lock ordering (deadlock-avoidance invariant)
 - Any transaction that acquires an EXCLUSIVE account-row lock (`SELECT … FROM
-  sender.accounts … FOR UPDATE`) AND also writes a `sender.jobs` row MUST acquire the
+  send_managed.accounts … FOR UPDATE`) AND also writes a `send_managed.jobs` row MUST acquire the
   account lock FIRST — account → job. This is load-bearing and codebase-wide, not a
   per-phase detail.
-- WHY (structural, permanent): the `sender.jobs` `AFTER UPDATE OF state` trigger
-  (`sender_0008`) inserts `NEW.assigned_account_id` into `job_events`, so EVERY job-row
+- WHY (structural, permanent): the `send_managed.jobs` `AFTER UPDATE OF state` trigger
+  (`send_managed_0008`) inserts `NEW.assigned_account_id` into `job_events`, so EVERY job-row
   UPDATE that leaves the account assigned takes an FK `KEY SHARE` on the account row
   AFTER the job-row lock. A path that separately grabs an exclusive account `FOR UPDATE`
   after the job row cycles (`40P01`) with one that grabbed it before. This class has bitten
@@ -200,7 +200,7 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
   reported a fix. Running gates in parallel makes that cross-verification structurally
   impossible: a later gate cannot re-check a fix that does not exist yet at the moment it runs.
 - Phase 8's four review gates (R1–R4) were run in parallel. R3 and R4 found four real issues (one
-  HIGH: a config-validation gap that could wedge the Brain from a routine admin write). All four
+  HIGH: a config-validation gap that could wedge the Control from a routine admin write). All four
   fixes were committed in a single pass with NO independent re-verification, because no
   subsequent gate ran afterward to check them. A dedicated CLOSEOUT pass (this one) later found
   that one of the four "fixes" was only partially applied (the `pg_stat_activity` scoping added

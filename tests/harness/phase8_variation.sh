@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # phase8_variation.sh — the Phase-8 content-variation LIVE behavioral suite. Drives the running
-# compose stack (real Brain, real box over real mTLS, real Mailpit) end to end, sourced by run.sh
+# compose stack (real Control, real worker over real mTLS, real Mailpit) end to end, sourced by run.sh
 # AFTER phase3_send.sh (reuses its pool/account fixtures + $ADMKEY/$PLTOK/$SYSUSER/$DC/$PSQL/
 # $PSQL1). NEVER mocks (CLAUDE.md Rule 3).
 #
 # Covers what only the whole real pipe can prove:
 #   T1  ALL TOGGLES OFF (the config seeds' own defaults, untouched) => Mailpit's raw message for a
 #       fresh send is BYTE-IDENTICAL in shape to the Phase 3 T1 message (headers, MIME, no injected
-#       bytes) — the headline regression guard, proven against the deployed Brain+box, not just unit
+#       bytes) — the headline regression guard, proven against the deployed Control+worker, not just unit
 #       tests.
 #   T3  variation ON (a representative real profile) => the Mailpit-delivered message differs at the
 #       byte level from the all-off baseline, and STILL PARSES/RENDERS (Content-Type present, body
@@ -16,7 +16,7 @@
 #   T7  unique_url_params on => the delivered message's links carry a real _ref/_v param and NO
 #       tracking/redirect surface, observed in the ACTUAL bytes Mailpit received (not a unit fixture).
 #   S1  live-stack re-check: with variation ON, the credential canary still never appears anywhere
-#       (Mailpit body, brain/box logs, send_logs, jobs) — the security regression guard (§8 S1) run
+#       (Mailpit body, control/worker logs, send_logs, jobs) — the security regression guard (§8 S1) run
 #       against the real send path with variation active, not skipped because Phase 3's S1 already
 #       covered the off case.
 #
@@ -40,7 +40,7 @@ RUN8T1="$(curl -s -w '\n%{http_code}' -X POST http://localhost:8080/v1/run -H "A
 JOB8T1="$(echo "$RUN8T1" | head -1 | grep -oE '"job_id":"[0-9a-f-]+"' | cut -d'"' -f4 || true)"
 sent=0
 for _ in $(seq 1 30); do
-  st="$(PSQL "SELECT state FROM sender.jobs WHERE id='$JOB8T1'" || true)"
+  st="$(PSQL "SELECT state FROM send_managed.jobs WHERE id='$JOB8T1'" || true)"
   [[ "$st" == "sent" ]] && { sent=1; break; }
   sleep 1
 done
@@ -84,7 +84,7 @@ RUN8T3="$(curl -s -w '\n%{http_code}' -X POST http://localhost:8080/v1/run -H "A
 JOB8T3="$(echo "$RUN8T3" | head -1 | grep -oE '"job_id":"[0-9a-f-]+"' | cut -d'"' -f4 || true)"
 sent3=0
 for _ in $(seq 1 30); do
-  st="$(PSQL "SELECT state FROM sender.jobs WHERE id='$JOB8T3'" || true)"
+  st="$(PSQL "SELECT state FROM send_managed.jobs WHERE id='$JOB8T3'" || true)"
   [[ "$st" == "sent" ]] && { sent3=1; break; }
   sleep 1
 done
@@ -123,7 +123,7 @@ fi
 # credential encoded, so a logged AUTH exchange leaks a WORKING credential past every plaintext
 # grep — and they matter SEPARATELY here because variation rewrites the message on its way out: this
 # is the only scan that covers the credential with the variation code paths active.
-LOGS8="$($DC --profile multibox logs 2>&1 || true)"
+LOGS8="$($DC --profile multiworker logs 2>&1 || true)"
 if grep -qF "$CANARY" <<<"$LOGS8"; then bad "P8 S1: the canary credential appears in service logs with variation ON"; else ok "P8 S1: canary absent from service logs with variation ON (plaintext)"; fi
 if canary_b64_in "$LOGS8"; then
   bad "P8 S1: the canary credential appears BASE64-ENCODED in service logs with variation ON"
@@ -138,9 +138,9 @@ if canary_b64_in "$RAW8T3"; then
 else
   ok "P8 S1: canary absent from the delivered message (base64)"
 fi
-DBLEAK8="$(PSQL "SELECT (SELECT count(*) FROM sender.send_logs WHERE body LIKE '%${CANARY}%' OR smtp_response LIKE '%${CANARY}%' OR headers::text LIKE '%${CANARY}%') + (SELECT count(*) FROM sender.jobs WHERE last_error_message LIKE '%${CANARY}%')" || true)"
+DBLEAK8="$(PSQL "SELECT (SELECT count(*) FROM send_managed.send_logs WHERE body LIKE '%${CANARY}%' OR smtp_response LIKE '%${CANARY}%' OR headers::text LIKE '%${CANARY}%') + (SELECT count(*) FROM send_managed.jobs WHERE last_error_message LIKE '%${CANARY}%')" || true)"
 [[ "${DBLEAK8:-0}" == "0" ]] && ok "P8 S1: canary absent from send_logs/jobs with variation ON" || bad "P8 S1: canary leaked into send_logs/jobs with variation ON ($DBLEAK8 hits)"
-DBLEAK8B64="$(PSQL "SELECT (SELECT count(*) FROM sender.send_logs WHERE body LIKE '%${CANARY_B64}%' OR smtp_response LIKE '%${CANARY_B64}%' OR headers::text LIKE '%${CANARY_B64}%' OR body LIKE '%${CANARY_PLAIN_B64}%' OR headers::text LIKE '%${CANARY_PLAIN_B64}%') + (SELECT count(*) FROM sender.jobs WHERE last_error_message LIKE '%${CANARY_B64}%' OR last_error_message LIKE '%${CANARY_PLAIN_B64}%')" || true)"
+DBLEAK8B64="$(PSQL "SELECT (SELECT count(*) FROM send_managed.send_logs WHERE body LIKE '%${CANARY_B64}%' OR smtp_response LIKE '%${CANARY_B64}%' OR headers::text LIKE '%${CANARY_B64}%' OR body LIKE '%${CANARY_PLAIN_B64}%' OR headers::text LIKE '%${CANARY_PLAIN_B64}%') + (SELECT count(*) FROM send_managed.jobs WHERE last_error_message LIKE '%${CANARY_B64}%' OR last_error_message LIKE '%${CANARY_PLAIN_B64}%')" || true)"
 [[ "${DBLEAK8B64:-0}" == "0" ]] && ok "P8 S1: canary absent from send_logs/jobs with variation ON (base64)" || bad "P8 S1: canary leaked BASE64-ENCODED into send_logs/jobs with variation ON ($DBLEAK8B64 hits)"
 
 # --- restore every toggle flipped above to its seeded default, so a later harness run (or another

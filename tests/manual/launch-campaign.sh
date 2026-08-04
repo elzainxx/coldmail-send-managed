@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # launch-campaign.sh — seed a platform campaign and POST /v1/run against the LIVE dev stack.
 #
-# WHY THIS IS TRACKED. Walking Docs/sender-module-local-test-guide.md needs a campaign on demand at
+# WHY THIS IS TRACKED. Walking Docs/coldmail-send-managed-local-test-guide.md needs a campaign on demand at
 # nearly every stage (7, 8, 9, 10, 12). That was being done with ad-hoc throwaway shell each time,
 # which is how two stages ended up not reproducible after the fact. This is that recipe, once.
 #
 # It is a TEST DRIVER, not product code: it writes public.job_items (the PLATFORM's table, which the
 # real platform owns and Module 2 only reads) and then calls the real Domain-A endpoint with the real
-# service token. It touches nothing in the `sender` schema — the Brain does all of that, which is the
+# service token. It touches nothing in the `send_managed` schema — the Control does all of that, which is the
 # point: the campaign has to arrive the way a real caller sends it.
 #
 # Usage:
 #   tests/manual/launch-campaign.sh <tag> <count>            # seed + run
 #   tests/manual/launch-campaign.sh <tag> <count> --seed-only # seed, print the ids, do not run
 #
-# Writes <tag>.ids (the sender.jobs ids, once run) to the CWD so a follow-up assertion can name the
+# Writes <tag>.ids (the send_managed.jobs ids, once run) to the CWD so a follow-up assertion can name the
 # exact rows it expects, rather than "the most recent N jobs" — which is wrong the moment two runs
 # overlap, and overlapping runs are exactly what Stage 9 does.
 set -euo pipefail
@@ -44,7 +44,7 @@ CAMPAIGN_BODY="${CAMPAIGN_BODY:-Body for $TAG message %d.}"
 PLATFORM_TOKEN="$(grep -E '^PLATFORM_TOKEN=' .env | cut -d= -f2)"
 [ -n "$PLATFORM_TOKEN" ] || { echo "no PLATFORM_TOKEN in .env" >&2; exit 1; }
 
-# Reuse the existing dev user rather than inventing one — sender.accounts rows are already scoped to
+# Reuse the existing dev user rather than inventing one — send_managed.accounts rows are already scoped to
 # it, and a fresh user_id would have no pool and every job would correctly fail routing.
 #
 # CAMPAIGN_USER_ID overrides it. Needed from Stage 10 on: an isolated tenant (own dedicated pool, own

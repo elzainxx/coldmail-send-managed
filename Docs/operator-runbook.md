@@ -14,7 +14,7 @@ When a tree tells you to change a key, look up its meaning, type, and current de
 Two access paths. The admin API is the normal one; direct SQL is for when you need to see *why*.
 
 ```bash
-export ADMIN=http://localhost:8080               # the Brain's admin/health address
+export ADMIN=http://localhost:8080               # the Control's admin/health address
 export KEY='<the plaintext operator admin key>'  # Domain B — never the platform service token
 ahealth() { curl -fsS "$ADMIN/v1/admin/health" -H "Authorization: Bearer $KEY"; }
 ```
@@ -25,7 +25,7 @@ tells you nothing; `jq` is what makes the output readable. Use a function, not a
 aliases do not expand inside scripts or non-interactive shells. If you truly cannot install `jq`,
 `ahealth | python3 -m json.tool` pretty-prints it and then `grep -A5` works.
 
-For SQL, connect **as the Brain's own DB role or better** — on a Docker deployment:
+For SQL, connect **as the Control's own DB role or better** — on a Docker deployment:
 
 ```bash
 docker compose exec postgres psql -U postgres -d platform
@@ -33,7 +33,7 @@ docker compose exec postgres psql -U postgres -d platform
 
 Every query below is read-only unless it says otherwise. **Do not fix state with SQL.** Flag changes
 (pause/unpause, quarantine/unquarantine, enable/disable) go through the admin API so they write an
-audited `sender.account_events` row; a hand-edited `UPDATE` leaves no trace and the next incident
+audited `send_managed.account_events` row; a hand-edited `UPDATE` leaves no trace and the next incident
 has no history to read.
 
 ## The 30-second triage
@@ -41,13 +41,13 @@ has no history to read.
 Run these two, in this order, before anything else.
 
 ```bash
-curl -fsS $ADMIN/readyz    # is the Brain alive and is it THE Brain?
+curl -fsS $ADMIN/readyz    # is the Control alive and is it THE Control?
 ahealth                    # everything else
 ```
 
-`/readyz` returning `{"status":"ready","db":true,"singleton_lock":true,"at":"…"}` means the Brain is up, can
+`/readyz` returning `{"status":"ready","db":true,"singleton_lock":true,"at":"…"}` means the Control is up, can
 reach Postgres, and holds the singleton lock. Anything else, or no response at all, and you are in
-[The Brain is not running](#the-brain-is-not-running) — stop there, because every other symptom is
+[The Control is not running](#the-control-is-not-running) — stop there, because every other symptom is
 downstream of it.
 
 If `/readyz` is clean, the health snapshot tells you which tree to open:
@@ -57,7 +57,7 @@ If `/readyz` is clean, the health snapshot tells you which tree to open:
 | `queue.queued` is large and `dispatch.sends_last_window` is 0 | [Everything is queued and nothing is sending](#everything-is-queued-and-nothing-is-sending) |
 | `queue.waiting_for_capacity` > 0, or a pool with `"headroom":"exhausted"` | [Pool exhausted / waiting for capacity](#pool-exhausted--waiting-for-capacity) |
 | `accounts.quarantined` > 0 | [An account got quarantined](#an-account-got-quarantined) |
-| `boxes.stale` > 0, or `boxes.active` is 0 | [A box died](#a-box-died) |
+| `workers.stale` > 0, or `boxes.active` is 0 | [A worker died](#a-worker-died) |
 | `active_conditions[]` is non-empty | [Alert conditions](#alert-conditions--triage) |
 | Everything looks fine, `/readyz` is green, but nothing moves | The health surface cannot see a rejected config — [Step 8](#step-8--is-the-config-itself-rejected-a-config-fault-in-the-log) |
 | Everything looks fine but sends are landing badly | [Deliverability seems to be dropping](#deliverability-seems-to-be-dropping) |
@@ -73,7 +73,7 @@ quietly rather than fail your jobs, so silence is expected behavior, not a crash
 Walk the eight steps in order; the first one that matches is your cause. (Step 8 is the one that a
 green `/readyz` actively hides — check the log even when every endpoint looks healthy.)
 
-### Step 1 — Is the Brain running and holding the lock?
+### Step 1 — Is the Control running and holding the lock?
 
 ```bash
 curl -fsS $ADMIN/readyz
@@ -81,23 +81,23 @@ curl -fsS $ADMIN/readyz
 
 Expect `{"status":"ready","db":true,"singleton_lock":true,"at":"…"}` (`at` is the check timestamp;
 the three fields before it are what you read). If the request fails or
-`singleton_lock` is `false`, see [The Brain is not running](#the-brain-is-not-running). No Brain
+`singleton_lock` is `false`, see [The Control is not running](#the-control-is-not-running). No Control
 means no dispatch, and everything below is moot.
 
 If the process is clearly **alive** and answering but reports `singleton_lock:false`, that is the
-mid-life lock loss — a different situation from a Brain that never started. Go straight to
-[`readyz` says `singleton_lock:false` on a Brain that WAS ready](#readyz-says-singleton_lockfalse-on-a-brain-that-was-ready-mid-life-lock-loss).
+mid-life lock loss — a different situation from a Control that never started. Go straight to
+[`readyz` says `singleton_lock:false` on a Control that WAS ready](#readyz-says-singleton_lockfalse-on-a-control-that-was-ready-mid-life-lock-loss).
 
 ### Step 2 — Is dispatch switched off?
 
-`dispatch_enabled` is the panic switch. When it is `false` the Brain claims, routes, and pushes
+`dispatch_enabled` is the panic switch. When it is `false` the Control claims, routes, and pushes
 nothing — deliberately, cleanly, with zero job loss.
 
 ```bash
 ahealth | jq .dispatch.dispatch_paused    # true  ->  this is your cause
 ```
 
-The Brain also says so in its own log, once per occurrence rather than once per tick:
+The Control also says so in its own log, once per occurrence rather than once per tick:
 
 ```
 dispatch: dispatch_paused_by_operator — dispatch_enabled=false; this tick claimed/routed/pushed
@@ -107,8 +107,8 @@ nothing, queued jobs are untouched, reclaim/outcome/heartbeat continue
 **Fix:** set `dispatch_enabled` back to `true` via `PUT /v1/admin/config/dispatch_enabled`. It takes
 effect on the very next tick — no redeploy. Queued jobs resume from exactly where they were.
 
-Note what stays running while dispatch is paused: the reclaim loop, the outcome handler, and box
-heartbeats. A paused Brain still finishes in-flight work correctly; it just starts nothing new.
+Note what stays running while dispatch is paused: the reclaim loop, the outcome handler, and worker
+heartbeats. A paused Control still finishes in-flight work correctly; it just starts nothing new.
 
 ### Step 3 — Is `default_shared_pool_id` unset?
 
@@ -117,10 +117,10 @@ until an operator sets it. Until then, a base-tier campaign has no pool to resol
 stay cleanly `queued` forever.
 
 ```sql
-SELECT value FROM sender.config WHERE key = 'default_shared_pool_id';
+SELECT value FROM send_managed.config WHERE key = 'default_shared_pool_id';
 ```
 
-`{"v": null}` is your cause. The Brain logs it too, rate-limited across the whole process so it
+`{"v": null}` is your cause. The Control logs it too, rate-limited across the whole process so it
 cannot flood:
 
 ```
@@ -138,26 +138,26 @@ the pointer actually resolves:
 
 ```sql
 SELECT p.id, p.kind, p.enabled, p.name
-  FROM sender.pools p
- WHERE p.id = (SELECT (value->>'v')::uuid FROM sender.config WHERE key = 'default_shared_pool_id');
+  FROM send_managed.pools p
+ WHERE p.id = (SELECT (value->>'v')::uuid FROM send_managed.config WHERE key = 'default_shared_pool_id');
 ```
 
 Zero rows, `enabled = false`, or `kind <> 'shared'` — same cause, same fix.
 
-### Step 4 — Are any boxes connected?
+### Step 4 — Are any workers connected?
 
-Boxes are where sending actually happens. The Brain pushes to a *connected and idle* box; with none
-available, a claimed job is cleanly requeued (internal reason `no_box_available`) and retried later.
+Workers are where sending actually happens. The Control pushes to a *connected and idle* worker; with none
+available, a claimed job is cleanly requeued (internal reason `no_worker_available`) and retried later.
 
 ```bash
-ahealth | jq .boxes
+ahealth | jq .workers
 ```
 
-`"active": 0` is your cause. `"stale": N` with `"active": 0` means boxes were registered and then
-went silent — see [A box died](#a-box-died).
+`"active": 0` is your cause. `"stale": N` with `"active": 0` means workers were registered and then
+went silent — see [A worker died](#a-worker-died).
 
-There is a second, quieter version of this: boxes are `active` but all of them are **busy**. A box
-holds one job in flight at a time, so a tick that claims more jobs than there are idle boxes
+There is a second, quieter version of this: workers are `active` but all of them are **busy**. A worker
+holds one job in flight at a time, so a tick that claims more jobs than there are idle workers
 requeues the overflow rather than blocking. That is normal backpressure, and it shows up as
 throughput below what you expect — never as a stall. If `boxes.active` is healthy and
 `sends_last_window` is *non-zero but low*, you are throughput-limited, not stalled: see
@@ -175,12 +175,12 @@ ahealth | jq '{accounts, pools}'
 If `accounts.healthy` is 0, or every pool reads `"headroom":"exhausted"`, then no account can be
 selected and every queued job is waiting. To find out *which* reason applies to *which* account, run
 the per-account breakdown. It reads the two live config keys rather than hardcoding them, so it
-agrees with the Brain's own notion of "today":
+agrees with the Control's own notion of "today":
 
 ```sql
 WITH cfg AS (
-  SELECT (SELECT value->>'v'         FROM sender.config WHERE key = 'daily_reset_timezone') AS tz,
-         (SELECT (value->>'v')::int  FROM sender.config WHERE key = 'daily_reset_hour')     AS hr
+  SELECT (SELECT value->>'v'         FROM send_managed.config WHERE key = 'daily_reset_timezone') AS tz,
+         (SELECT (value->>'v')::int  FROM send_managed.config WHERE key = 'daily_reset_hour')     AS hr
 )
 SELECT a.id, a.pool_id, a.smtp_host, a.account_status_score AS score,
        CASE
@@ -193,7 +193,7 @@ SELECT a.id, a.pool_id, a.smtp_host, a.account_status_score AS score,
               AND a.daily_sent_count >= a.daily_limit  THEN 'at daily limit — SELF-CLEARS at reset'
          ELSE 'ELIGIBLE'
        END AS why_not_eligible
-  FROM sender.accounts a, cfg
+  FROM send_managed.accounts a, cfg
  ORDER BY a.pool_id, why_not_eligible, a.id;
 ```
 
@@ -206,7 +206,7 @@ Read the right-hand column. It splits into two fundamentally different situation
 - **MANUAL recovery only** (`quarantined`, `disabled`, `paused: manual`) — nothing will re-open these
   on their own. For `quarantined`, go to [An account got quarantined](#an-account-got-quarantined)
   **before** unquarantining. For `paused: manual` / `disabled`, someone turned it off deliberately;
-  check `sender.account_events` for who and why before turning it back on.
+  check `send_managed.account_events` for who and why before turning it back on.
 
 > **The two at-limit rows above are NOT the same row, and raising `daily_limit` only fixes one of
 > them.** Both read "at daily limit" to the eye, and both self-clear at the reset, but they recover
@@ -237,7 +237,7 @@ but not yet claimable, which looks like a stall if you only watch state counts.
 SELECT state, count(*),
        min(next_attempt_at) AS earliest_due,
        max(next_attempt_at) AS latest_due
-  FROM sender.jobs WHERE state = 'queued' GROUP BY state;
+  FROM send_managed.jobs WHERE state = 'queued' GROUP BY state;
 ```
 
 If `earliest_due` is in the future, nothing is wrong — the backoff is doing its job. Look at *why*
@@ -245,12 +245,12 @@ they were requeued:
 
 ```sql
 SELECT last_error_class, count(*), max(attempt_count) AS worst_attempt
-  FROM sender.jobs WHERE state = 'queued' AND last_error_class IS NOT NULL
+  FROM send_managed.jobs WHERE state = 'queued' AND last_error_class IS NOT NULL
  GROUP BY last_error_class ORDER BY 2 DESC;
 ```
 
 A wall of `auth_failure` means a credential is wrong. `throttle` means the provider is pushing back.
-`timeout` means boxes are not reporting. Each of those has its own tree below or in
+`timeout` means workers are not reporting. Each of those has its own tree below or in
 [Alert conditions](#alert-conditions--triage).
 
 ### Step 7 — Is the user out of quota?
@@ -266,11 +266,11 @@ arriving at all:
 
 ```sql
 SELECT count(*) AS created_last_hour
-  FROM sender.jobs WHERE created_at >= NOW() - INTERVAL '1 hour';
+  FROM send_managed.jobs WHERE created_at >= NOW() - INTERVAL '1 hour';
 ```
 
-Zero, with a healthy Brain, means nothing is being submitted — that is a platform-side question, not
-a sender-module one. Quota enforcement is registered as deliberately out of scope in
+Zero, with a healthy Control, means nothing is being submitted — that is a platform-side question, not
+a coldmail-send-managed one. Quota enforcement is registered as deliberately out of scope in
 [`future-work.md`](./future-work.md).
 
 There is one genuine module-side rejection worth knowing, because it looks like a quota error:
@@ -279,7 +279,7 @@ campaign, `run` rejects the new campaign with `409 conflict` and creates zero jo
 
 ```sql
 SELECT user_id, campaign_id, count(*), min(state::text) AS a_state
-  FROM sender.jobs
+  FROM send_managed.jobs
  WHERE state NOT IN ('sent','failed','bounced')
  GROUP BY user_id, campaign_id ORDER BY user_id;
 ```
@@ -297,7 +297,7 @@ nothing is reclaimed, and the only symptom is in the log.
 There are **two** kinds of config fault, and they look nearly identical in the log. Grep for both:
 
 ```bash
-journalctl -u sender-brain --since "15 min ago" | grep -E 'tick error: config|sweep error: config'
+journalctl -u send_managed-control --since "15 min ago" | grep -E 'tick error: config|sweep error: config'
 # (a) an ORDERING invariant — two keys that are individually fine but wrong relative to each other:
 # dispatch: tick error: config_ordering_violation: smtp_operation_timeout_sec (100) must be < job_max_processing_time_sec (50) level=error
 # reclaim:  tick error: config_ordering_violation: … level=error
@@ -310,7 +310,7 @@ Both name the offending key — that is your whole diagnosis. For (b) the fix is
 well-formed value for the one key it names (`{"v": <value of the declared type>}`); check the key's
 `value_type` in [`config-reference.md`](./config-reference.md).
 
-**Neither is a database problem.** Both mean the DB answered perfectly and the Brain refused to act on
+**Neither is a database problem.** Both mean the DB answered perfectly and the Control refused to act on
 what came back (Rule 1: reject, never clamp). You should see **no** `db outage DETECTED` line — if you
 do, it is a separate, genuine transport fault (see the failure-mode table at the end of this
 document), not this. Note for anyone reading old logs: before 2026-07-28 a type fault (b) *was*
@@ -323,7 +323,7 @@ Confirm against the table — this also shows a corrupt value, since `value->>'v
 row whose `v` key is missing entirely:
 
 ```sql
-SELECT key, value->>'v' AS value FROM sender.config
+SELECT key, value->>'v' AS value FROM send_managed.config
  WHERE key IN ('smtp_operation_timeout_sec','job_max_processing_time_sec',
                'box_outcome_buffer_ttl_sec','startup_reconnect_window_sec') ORDER BY key;
 ```
@@ -349,7 +349,7 @@ both classes before they land — a write that would invert either pair (`400
 config_ordering_violation`) and a value of the wrong type for its key (`400 validation_failed`) — and
 config writes are serialized, so the API cannot produce either state, even from two simultaneous PUTs.
 A live fault therefore means it arrived by some **other** path: a direct SQL `UPDATE` against
-`sender.config`, a restore/seed that wrote several keys at once, or a migration that seeded a bad
+`send_managed.config`, a restore/seed that wrote several keys at once, or a migration that seeded a bad
 value. Look there, not at the API. Both invariants, and every key's declared `value_type`, are in
 [`config-reference.md`](./config-reference.md).
 
@@ -358,7 +358,7 @@ value. Look there, not at the API. Both invariants, and every key's declared `va
 ## An account got quarantined
 
 Quarantine is **manual-recovery-only by design** — the system will never un-quarantine an account by
-itself. That is deliberate: quarantine means the Brain concluded this account is not fit to send, and
+itself. That is deliberate: quarantine means the Control concluded this account is not fit to send, and
 an automatic recovery would put it straight back into rotation to fail again.
 
 **So the first move is never to unquarantine. It is to find out why.**
@@ -369,7 +369,7 @@ Two triggers exist, and they mean very different things. The audit trail records
 
 ```sql
 SELECT created_at, actor, action, reason, from_flags, to_flags
-  FROM sender.account_events
+  FROM send_managed.account_events
  WHERE account_id = '<account-uuid>'
  ORDER BY created_at DESC LIMIT 20;
 ```
@@ -407,9 +407,9 @@ SELECT id, account_status_score, consecutive_failures,
        daily_sent_count, daily_limit,
        last_success_at, last_failure_at,
        NOW() - last_success_at AS since_last_success
-  FROM sender.accounts WHERE id = '<account-uuid>';
-SELECT (SELECT value FROM sender.config WHERE key = 'quarantine_threshold') AS threshold,
-       (SELECT value FROM sender.config WHERE key = 'status_score_weights') AS weights;
+  FROM send_managed.accounts WHERE id = '<account-uuid>';
+SELECT (SELECT value FROM send_managed.config WHERE key = 'quarantine_threshold') AS threshold,
+       (SELECT value FROM send_managed.config WHERE key = 'status_score_weights') AS weights;
 ```
 
 Then read the failures that drove it down:
@@ -417,7 +417,7 @@ Then read the failures that drove it down:
 ```sql
 SELECT je.created_at, je.error_class, je.from_state, je.to_state, je.actor,
        left(je.error_message, 160) AS err
-  FROM sender.job_events je
+  FROM send_managed.job_events je
  WHERE je.account_id = '<account-uuid>' AND je.error_class IS NOT NULL
  ORDER BY je.created_at DESC LIMIT 30;
 ```
@@ -429,9 +429,9 @@ The class distribution is the diagnosis:
   probably fine and the quarantine was a correct reaction to a real outage.
 - **`throttle`** — you were sending faster than the provider allows. The account is healthy; your
   pacing or daily limit is too aggressive. Fix the cause before reinstating, or it recurs.
-- **`timeout`** — the box never got a reply, or never reported. Often an infrastructure problem (the
-  box, the network, the provider hanging) rather than an account problem. Check
-  [A box died](#a-box-died) too.
+- **`timeout`** — the worker never got a reply, or never reported. Often an infrastructure problem (the
+  worker, the network, the provider hanging) rather than an account problem. Check
+  [A worker died](#a-worker-died) too.
 - **`unknown`** — the classifier could not place the provider's response. Read `error_message`
   directly; this is the bucket for genuinely novel provider behavior.
 - **`bounce_permanent`** — cannot be a cause. A bounce is a *recipient* fault and never penalizes an
@@ -508,17 +508,17 @@ ahealth | jq -r '.pools[] | select(.headroom == "exhausted") | .pool_id'
 ```
 
 `"headroom": "exhausted"` means that pool has zero eligible accounts *right now*. To see which pool
-a tenant would actually use, resolve the chain the way the Brain does — the tenant's own enabled
+a tenant would actually use, resolve the chain the way the Control does — the tenant's own enabled
 dedicated pools first (oldest first), then the shared fallback:
 
 ```sql
--- The tenant's dedicated pools, in the order the Brain tries them:
+-- The tenant's dedicated pools, in the order the Control tries them:
 SELECT id, name, enabled, fallback_pool_id, routing_strategy
-  FROM sender.pools
+  FROM send_managed.pools
  WHERE kind = 'dedicated' AND owner_user_id = '<user-uuid>' AND enabled = TRUE
  ORDER BY created_at ASC;
 -- Then the shared fallback:
-SELECT (SELECT value FROM sender.config WHERE key = 'default_shared_pool_id') AS default_shared;
+SELECT (SELECT value FROM send_managed.config WHERE key = 'default_shared_pool_id') AS default_shared;
 ```
 
 Then run the per-account `why_not_eligible` query from
@@ -542,34 +542,34 @@ in V1 (registered in [`future-work.md`](./future-work.md)). If a dedicated tenan
 
 ---
 
-## A box died
+## A worker died
 
 ### What recovers automatically — usually everything
 
-The system is built to survive box loss without a human. Before intervening, know what is already
+The system is built to survive worker loss without a human. Before intervening, know what is already
 happening on its own:
 
-- **Detection.** The Brain marks a box `stale` once it has been silent longer than
+- **Detection.** The Control marks a worker `stale` once it has been silent longer than
   `heartbeat_interval_sec × heartbeat_missed_threshold`.
-- **Reclaim.** Every job in flight on that box is returned `assigned`/`sending` → `queued`, with the
+- **Reclaim.** Every job in flight on that worker is returned `assigned`/`sending` → `queued`, with the
   lease cleared, `attempt_count` incremented (saturating — it never exceeds `max_attempts`), and a
-  backoff delay applied. Two independent detectors cover this: a dead-box heartbeat scan, and a
-  per-job lease-expiry backstop that works even if box liveness is misleading. A reclaimed job
+  backoff delay applied. Two independent detectors cover this: a dead-worker heartbeat scan, and a
+  per-job lease-expiry backstop that works even if worker liveness is misleading. A reclaimed job
   reads to the platform as clean pending `queued`.
-- **The account is deliberately untouched.** A reclaim is a Brain-*declared* timeout with no send
-  outcome to attribute, so it never penalizes the account's score or flags. A box outage does not
+- **The account is deliberately untouched.** A reclaim is a Control-*declared* timeout with no send
+  outcome to attribute, so it never penalizes the account's score or flags. A worker outage does not
   damage your accounts.
 - **No job fails from repeated reclaims.** A job that is reclaimed over and over does not fail by
   attempt count; it fails only on true pool exhaustion.
-- **Buffered outcome replay.** A box that loses only its *connection* (not its process) keeps its
-  unacked outcomes in an in-memory buffer, reconnects, and replays them. The Brain persists each
+- **Buffered outcome replay.** A worker that loses only its *connection* (not its process) keeps its
+  unacked outcomes in an in-memory buffer, reconnects, and replays them. The Control persists each
   one idempotently and only *then* acks, so a replay is never a double-send. `provider_message_id`
   carries a UNIQUE constraint, which is the structural backstop.
-- **Brain restart, not box restart.** If the *Brain* restarted, its startup rescan extends the leases
-  of orphaned in-flight jobs by `startup_reconnect_window_sec` so reconnecting boxes have a bounded
+- **Control restart, not worker restart.** If the *Control* restarted, its startup rescan extends the leases
+  of orphaned in-flight jobs by `startup_reconnect_window_sec` so reconnecting workers have a bounded
   window to replay before the reclaim loop touches anything.
 
-The one thing that does **not** survive: a box **process** restart loses its in-memory outcome
+The one thing that does **not** survive: a worker **process** restart loses its in-memory outcome
 buffer. Outcomes in that buffer are dropped, and their jobs recover via reclaim instead — correct,
 but slower, and the send may be retried. On-disk buffer persistence is registered in
 [`future-work.md`](./future-work.md).
@@ -577,58 +577,58 @@ but slower, and the send may be retried. On-disk buffer persistence is registere
 ### Confirm what actually happened
 
 ```bash
-ahealth | jq .boxes
+ahealth | jq .workers
 ```
 
 ```sql
 SELECT id, status, last_heartbeat_at,
        NOW() - last_heartbeat_at AS silent_for, registered_at, disabled_at
-  FROM sender.boxes ORDER BY last_heartbeat_at ASC;
+  FROM send_managed.boxes ORDER BY last_heartbeat_at ASC;
 
 -- Jobs it was holding (should trend to zero as reclaim runs):
-SELECT state, count(*) FROM sender.jobs
- WHERE assigned_box_id = '<box-uuid>' AND state IN ('assigned','sending') GROUP BY state;
+SELECT state, count(*) FROM send_managed.jobs
+ WHERE assigned_box_id = '<worker-uuid>' AND state IN ('assigned','sending') GROUP BY state;
 
 -- Proof the reclaim loop is working:
 SELECT created_at, job_id, from_state, to_state, error_class
-  FROM sender.job_events WHERE actor = 'reclaim_loop'
+  FROM send_managed.job_events WHERE actor = 'reclaim_loop'
  ORDER BY created_at DESC LIMIT 20;
 ```
 
-Then read the box's own log on its host. Useful lines, and what they mean:
+Then read the worker's own log on its host. Useful lines, and what they mean:
 
-| Box log line | Meaning |
+| Worker log line | Meaning |
 |---|---|
 | `registered over mTLS stream` | Healthy. It is connected and waiting for work. |
 | `control stream closed; reconnecting (outcome buffer retained)` | Normal reconnect. It kept its outcomes. No action. |
-| `still cannot register after N attempts, but M unacked outcome(s) remain inside the buffer TTL — continuing to retry rather than exiting` | It is deliberately staying alive to protect buffered outcomes. Let it. Fix the Brain-side reachability. |
-| `could not (re)register within the retry budget; exiting for restart` | It gave up and expects its supervisor to restart it. Almost always: the Brain was not reachable, or the `sender.boxes` row / token is wrong. |
+| `still cannot register after N attempts, but M unacked outcome(s) remain inside the buffer TTL — continuing to retry rather than exiting` | It is deliberately staying alive to protect buffered outcomes. Let it. Fix the Control-side reachability. |
+| `could not (re)register within the retry budget; exiting for restart` | It gave up and expects its supervisor to restart it. Almost always: the Control was not reachable, or the `send_managed.boxes` row / token is wrong. |
 
 ### When a human should actually intervene
 
-Reclaim handles the *jobs*. It does not bring the box back. Step in when:
+Reclaim handles the *jobs*. It does not bring the worker back. Step in when:
 
-- **The box is not coming back on its own.** Check the supervisor (`systemctl status sender-box`),
-  the host, and network reachability to the Brain's box-link port. See
+- **The worker is not coming back on its own.** Check the supervisor (`systemctl status send_managed-worker`),
+  the host, and network reachability to the Control's worker-link port. See
   [`install-and-deploy.md`](./install-and-deploy.md) Part 5 for redeploy and add/remove procedures.
 - **It flaps** — repeatedly `active` → `stale` → `active`. Each cycle reclaims in-flight jobs and
   burns an attempt. Take it out of service (`disabled`) until you have fixed the cause; a flapping
-  box is worse than an absent one.
-- **`boxes.active` reaches 0.** Nothing can send at all. This is the one box condition that is a
+  worker is worse than an absent one.
+- **`boxes.active` reaches 0.** Nothing can send at all. This is the one worker condition that is a
   full outage rather than degraded capacity.
-- **It is being decommissioned.** Removing a box is a *token* operation, not a certificate one:
-  clearing or rotating `token_hash` in `sender.boxes` refuses it on its **next connect** regardless of
+- **It is being decommissioned.** Removing a worker is a *token* operation, not a certificate one:
+  clearing or rotating `token_hash` in `send_managed.boxes` refuses it on its **next connect** regardless of
   how valid its mTLS certificate still is. Procedure in
-  [`install-and-deploy.md`](./install-and-deploy.md). **Stop the box process too** — the check runs
-  only in the register handshake, so the SQL does not disconnect a box that is currently streaming,
-  and until it disconnects the Brain will keep pushing it credentialed jobs. For a routine
-  decommission you are stopping it anyway. If you are revoking because you think the box is
+  [`install-and-deploy.md`](./install-and-deploy.md). **Stop the worker process too** — the check runs
+  only in the register handshake, so the SQL does not disconnect a worker that is currently streaming,
+  and until it disconnects the Control will keep pushing it credentialed jobs. For a routine
+  decommission you are stopping it anyway. If you are revoking because you think the worker is
   **compromised**, the order is reversed and it matters:
   [`disaster-recovery.md`](./disaster-recovery.md) §4a.
-- **Reclaim is not draining.** If `assigned`/`sending` counts for a dead box are not falling and
+- **Reclaim is not draining.** If `assigned`/`sending` counts for a dead worker are not falling and
   there are no `actor = 'reclaim_loop'` events, the reclaim loop itself is not running — check the
-  Brain's log for a DB outage halt or a panic, and see
-  [The Brain is not running](#the-brain-is-not-running).
+  Control's log for a DB outage halt or a panic, and see
+  [The Control is not running](#the-control-is-not-running).
 
 ---
 
@@ -679,18 +679,18 @@ window, and does not recur unless a *new* quarantine lands. The account stays qu
 condition disappears — use `accounts.quarantined` in the snapshot for the standing count. **Do not
 treat this condition clearing as the problem being resolved.**
 
-### `box_death`
+### `worker_death`
 
 ```json
-{"condition":"box_death","severity":"critical",
+{"condition":"worker_death","severity":"critical",
  "detail":{"box_id":"...","last_heartbeat_at":"..."},"since":"..."}
 ```
 
-**Means:** that box is *currently* `stale`. Unlike the one above, this is derived from live row
-state, so it disappears the moment the box heartbeats again.
+**Means:** that worker is *currently* `stale`. Unlike the one above, this is derived from live row
+state, so it disappears the moment the worker heartbeats again.
 
-**Triage:** go to [A box died](#a-box-died). Reclaim is already handling the jobs; your job is the
-box. Escalate immediately if `boxes.active` is 0.
+**Triage:** go to [A worker died](#a-worker-died). Reclaim is already handling the jobs; your job is the
+worker. Escalate immediately if `boxes.active` is 0.
 
 ---
 
@@ -710,7 +710,7 @@ ahealth | jq .errors_last_window
 | `auth_failure` | A credential broke or was revoked. Not a deliverability problem. |
 | `throttle` | You are sending too fast for the provider. Pace down; see the levers below. |
 | `transport_4xx` | Provider or network trouble, usually transient. |
-| `timeout` | Boxes or the provider are hanging. Check [A box died](#a-box-died). |
+| `timeout` | Workers or the provider are hanging. Check [A worker died](#a-worker-died). |
 | `bounce_permanent` | Bad recipient addresses. List quality, not account health — and it never penalizes the account. |
 
 These are counts of **failures**, so they size the incident directly: 12 in `transport_4xx` means twelve
@@ -718,9 +718,9 @@ failed attempts, not twelve log rows from fewer real failures. A job that failed
 succeeded on retry contributes exactly 1 here and shows up in `queue.sent` — a non-zero
 `errors_last_window` alongside a healthy `send_rate_per_min` is normal retry churn, not an outage.
 
-> If you query `sender.job_events` by hand rather than through this endpoint, filter on the transition
+> If you query `send_managed.job_events` by hand rather than through this endpoint, filter on the transition
 > shape (`to_state IN ('failed','bounced') OR (to_state='queued' AND from_state IS NOT NULL)`), not just
-> on `error_class IS NOT NULL`. Rows written before migration `sender_0022` carry a stale class on
+> on `error_class IS NOT NULL`. Rows written before migration `send_managed_0022` carry a stale class on
 > success and forward-progress transitions too, and `job_events` is append-only so they were not
 > rewritten. The endpoint already applies this filter; a raw `COUNT(*)` does not. See
 > [`api-contract.md`](./api-contract.md)'s `errors_last_window` note.
@@ -731,7 +731,7 @@ succeeded on retry contributes exactly 1 here and shows up in `queue.sent` — a
 > **V1 has no bounce, complaint, open, or click data.** The module knows only what the SMTP
 > conversation told it. A message the provider accepted with a `250` is recorded as `sent`, and if it
 > later bounces asynchronously, is filtered to spam, or is silently dropped, **this system will
-> never know.** `sender.error_class` has a `bounce_permanent` value, but it is only ever assigned
+> never know.** `send_managed.error_class` has a `bounce_permanent` value, but it is only ever assigned
 > from a *synchronous* SMTP rejection during the send itself.
 
 So a spam-folder problem or a reputation slide is, in V1, **invisible from inside this module**. You
@@ -747,7 +747,7 @@ DMARC aggregate reports, and postmaster tools. Bounce/complaint ingestion is reg
 | **Per-account daily limits** | `daily_limit` per account (`daily_limit_default` for new ones) | The hardest cap on per-identity volume, and usually the limit that binds first. Enforced in the database, not in memory. |
 | **Pacing** | `send_delay_min_sec` / `send_delay_max_sec`, `concurrency_per_user_default` | Randomized per-lane inter-send delay. Throughput ≈ lanes ÷ average delay — this is deliberately *not* a single global rate. |
 | **Content variation** | `variation_enabled` plus the per-feature `variation_*` keys | Reduces byte-identical repetition across messages (HTML minification, comment injection, CSS micro-variation, encoding/boundary rotation, preheaders, header style). All default to off/neutral, so the whole set at defaults is byte-identical to no variation at all. |
-| **Sender identity hygiene** | Per-account `from_address` / `from_name` | Must match what the provider has verified. A mismatch is a rejection or a spam signal, not a subtle effect. |
+| **SendManaged identity hygiene** | Per-account `from_address` / `from_name` | Must match what the provider has verified. A mismatch is a rejection or a spam signal, not a subtle effect. |
 | **Auto-quarantine** | `autoquarantine_mode`, `quarantine_threshold` | Pulls failing accounts out of rotation before they do more damage. In `shadow` (the default) it only *reports* — promote to `enforce` when you trust the threshold. |
 
 > **`one_by_one` is not "drain one account, then the next."** The name suggests it, and the earlier
@@ -768,7 +768,7 @@ DMARC aggregate reports, and postmaster tools. Bounce/complaint ingestion is reg
 > `one_by_one` to deliberately concentrate volume on one identity while other accounts in the pool
 > have larger limits** — it will spread anyway. If you want concentration, give the accounts equal
 > limits, or put the identity you want to drain in a pool by itself. Pinned by
-> `services/brain/internal/dispatch/onebyone_handover_test.go` (both directions: early handover on
+> `services/control/internal/dispatch/onebyone_handover_test.go` (both directions: early handover on
 > unequal limits, full stickiness on equal ones). Found walking Stage 8 of the local test guide.
 
 ### What does not exist in V1 — do not go looking for it
@@ -809,7 +809,7 @@ job, locks nothing, and mutates nothing — so it is safe to poll. Field-by-fiel
 
 The signature of a healthy system: `dispatch_paused` false, `sends_last_window` moving, `queued`
 *draining* rather than merely non-zero, `assigned`+`sending` small and churning, `waiting_for_capacity`
-0, no `stale` boxes, every pool `ok`, `active_conditions` empty.
+0, no `stale` workers, every pool `ok`, `active_conditions` empty.
 
 ### What each field is really telling you
 
@@ -819,13 +819,13 @@ The signature of a healthy system: `dispatch_paused` false, `sends_last_window` 
 | `dispatch.ticks_per_min` | Non-zero while there is work | 0 with a non-empty queue → dispatch is not claiming. Note this is an **observed-throughput approximation** derived from claim events, not a true tick counter: a tick that claims nothing is invisible here, so 0 with an *empty* queue is normal. |
 | `dispatch.sends_last_window` / `send_rate_per_min` | Tracks your expected volume | 0 with a non-empty queue → the flagship tree. Falling steadily → capacity or pacing; check accounts and pools. |
 | `queue.queued` | Non-zero is fine; it should **drain** | Growing monotonically while `sends_last_window` is 0. A large but shrinking queue is a working system with a backlog. |
-| `queue.assigned` + `sending` | Small, always changing | Persistently high and static → jobs in flight that nobody is reporting. Check boxes and the reclaim loop. |
+| `queue.assigned` + `sending` | Small, always changing | Persistently high and static → jobs in flight that nobody is reporting. Check workers and the reclaim loop. |
 | `queue.failed` | Small and stable | Rising → look at `errors_last_window` and per-job `last_error_class`. |
 | `queue.bounced` | Proportional to list quality | Rising sharply → list quality. Never an account-health signal (bounces never penalize accounts). |
 | `queue.waiting_for_capacity` | 0 | > 0 → capacity, **not** a fault. [Pool exhausted](#pool-exhausted--waiting-for-capacity). |
-| `boxes.active` | Your expected box count | Below it → degraded capacity. **0 → full outage.** |
-| `boxes.stale` | 0 | > 0 → [A box died](#a-box-died). |
-| `boxes.oldest_active_heartbeat_age_sec` | Well under `heartbeat_interval_sec × heartbeat_missed_threshold` | Creeping toward that product → a box is nearly stale but has not crossed yet. An **early warning**, and the most useful field here. |
+| `boxes.active` | Your expected worker count | Below it → degraded capacity. **0 → full outage.** |
+| `workers.stale` | 0 | > 0 → [A worker died](#a-worker-died). |
+| `workers.oldest_active_heartbeat_age_sec` | Well under `heartbeat_interval_sec × heartbeat_missed_threshold` | Creeping toward that product → a worker is nearly stale but has not crossed yet. An **early warning**, and the most useful field here. |
 | `accounts.healthy` | Enough to carry your volume | 0 → nothing can send. Compare against [`capacity-planning.md`](./capacity-planning.md). |
 | `accounts.paused` / `at_daily_limit` | Some, cyclically | These **overlap deliberately** — a daily-limit pause counts in both, so the buckets do not sum to your account total. Do not read them as disjoint. Both self-clear. |
 | `accounts.quarantined` | 0 | > 0 → the standing count of accounts needing manual attention. Unlike the alert condition, this does **not** age out. |
@@ -843,40 +843,40 @@ vanished from the list was disabled, not deleted.
 
 ---
 
-## The Brain is not running
+## The Control is not running
 
 Not a tree so much as a short checklist, because everything else depends on it.
 
 ```bash
-systemctl status sender-brain          # or: docker compose ps brain
-journalctl -u sender-brain -n 100      # or: docker compose logs --tail=100 brain
+systemctl status send_managed-control          # or: docker compose ps control
+journalctl -u send_managed-control -n 100      # or: docker compose logs --tail=100 control
 curl -fsS $ADMIN/readyz
 ```
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `readyz` says `singleton_lock:false`, log says `singleton lock not acquired within …: another Brain is active; exiting cleanly` | Another Brain holds the advisory lock. **This is correct behavior** — exactly one Brain may be active. | Find and stop the other one. There is no stale lock to clear: the lock is session-level, so even `SIGKILL` releases it. If nothing else is running, the lock is genuinely held by a live session — check `pg_stat_activity`. |
-| Log ends at `FATAL send-path config load` | A config key the Brain requires is missing or unreadable — most often the schema is older than the binary. | Run migrations, then start the Brain. **Migrations always lead the Brain deploy**; the ordering and why are in [`install-and-deploy.md`](./install-and-deploy.md) Part 6. |
-| `readyz` says `db:false`, log says `db outage DETECTED` | Postgres is unreachable. The Brain **stays alive**, halts the dispatch/reclaim/retention loops on bounded backoff, and invents nothing — no job is marked sent, failed, bounced, or requeued while the DB is down. | Fix Postgres. Recovery needs no reconciliation: the log will say `db outage RESOLVED … RESUMING loops from stored state`, boxes replay buffered outcomes, and each is acked only after it commits. |
-| `readyz` says `db:true` but the log repeats `tick error: config …` | A **config fault**, not a database fault: the DB answered and the Brain refused to act on an unusable value (a broken ordering invariant, or a value of the wrong type for its key). The loops halt and invent nothing, exactly as above — but Postgres is fine. There is deliberately **no** `db outage` line for this. | [Step 8](#step-8--is-the-config-itself-rejected-a-config-fault-in-the-log). The log names the offending key; write a valid value and the next tick resumes on its own — no restart. |
+| `readyz` says `singleton_lock:false`, log says `singleton lock not acquired within …: another Control is active; exiting cleanly` | Another Control holds the advisory lock. **This is correct behavior** — exactly one Control may be active. | Find and stop the other one. There is no stale lock to clear: the lock is session-level, so even `SIGKILL` releases it. If nothing else is running, the lock is genuinely held by a live session — check `pg_stat_activity`. |
+| Log ends at `FATAL send-path config load` | A config key the Control requires is missing or unreadable — most often the schema is older than the binary. | Run migrations, then start the Control. **Migrations always lead the Control deploy**; the ordering and why are in [`install-and-deploy.md`](./install-and-deploy.md) Part 6. |
+| `readyz` says `db:false`, log says `db outage DETECTED` | Postgres is unreachable. The Control **stays alive**, halts the dispatch/reclaim/retention loops on bounded backoff, and invents nothing — no job is marked sent, failed, bounced, or requeued while the DB is down. | Fix Postgres. Recovery needs no reconciliation: the log will say `db outage RESOLVED … RESUMING loops from stored state`, workers replay buffered outcomes, and each is acked only after it commits. |
+| `readyz` says `db:true` but the log repeats `tick error: config …` | A **config fault**, not a database fault: the DB answered and the Control refused to act on an unusable value (a broken ordering invariant, or a value of the wrong type for its key). The loops halt and invent nothing, exactly as above — but Postgres is fine. There is deliberately **no** `db outage` line for this. | [Step 8](#step-8--is-the-config-itself-rejected-a-config-fault-in-the-log). The log names the offending key; write a valid value and the next tick resumes on its own — no restart. |
 | `admin API NOT mounted` / `platform API NOT mounted` in the log | The corresponding credential env var is unset, and the surface is **fail-closed** by design. | Set `ADMIN_API_KEY_HASHES` (Domain B) or `PLATFORM_TOKEN_HASHES` (Domain A). See [`install-and-deploy.md`](./install-and-deploy.md) Part 3. |
-| Clean shutdown that seems to hang | The drain: dispatch stops claiming while in-flight sends are given up to `shutdown_drain_timeout_sec` to report. | Let it finish. If your supervisor's stop timeout is *shorter* than that key, it will `SIGKILL` a Brain that was draining correctly — the systemd unit in the install guide sets `TimeoutStopSec` above it for exactly this reason. |
-| Brain exits **137** on shutdown instead of 0 | The stop grace is shorter than `shutdown_drain_timeout_sec`, so the supervisor killed a drain in progress. Under Compose that is `stop_grace_period` (Docker's default is only **10 s**); under systemd it is `TimeoutStopSec`; if a unit wraps a compose file, **both** apply and the shorter wins. | Raise the grace above the key. Not urgent and never unsafe — §4.2 leave-in-place requeues nothing and marks nothing, and the next boot's rescan recovers the in-flight jobs — but it converts a clean drain into avoidable reclaim work. The `drain_grace` CI gate enforces this for the committed dev file and the documented unit; it cannot see your prod file. |
-| Jobs left in flight after shutdown | Deliberate leave-in-place. The log says so: `N job(s) left in flight and RECOVERABLE (not requeued, not marked)`. | Nothing. The next boot's startup rescan extends their leases so boxes can replay; genuinely stuck ones reclaim normally. |
-| `DELETE /v1/admin/accounts/{id}` returns **500**, log says `account_write_error: … sender.job_events is append-only: UPDATE forbidden` | **Your schema is behind the binary: migration `0024` is not applied.** This was a real defect from Phase 1 through Phase 10 (G12-OD-1 / ADR-0012) and is **fixed** as of 2026-07-29 by `sender_0024`, so on a current schema you will not see it. The mechanism: the account has been assigned a job at least once, so `job_events` holds rows referencing it; the FK's `ON DELETE SET NULL` cleanup is an `UPDATE`, which that table's append-only trigger rejected with no carve-out. Deleting a **box** with job history failed the same way. An account with **no** job history always deleted `204` — which is why the defect stayed invisible for ten phases. | Check `SELECT version FROM sender.schema_migrations ORDER BY version` for `0024`, and run migrations if it is missing (**migrations always lead the Brain deploy** — [`install-and-deploy.md`](./install-and-deploy.md) Part 6). Nothing needs cleaning up either way: the delete aborts atomically, so **nothing is dropped, nulled, or corrupted**. Note that hard delete is rarely the right verb operationally — to take an account out of service, `POST /v1/admin/accounts/{id}/disable` (or `/quarantine`) remains the intended lever, reversible and audit-preserving. Reach for `DELETE` only for genuine erasure. |
+| Clean shutdown that seems to hang | The drain: dispatch stops claiming while in-flight sends are given up to `shutdown_drain_timeout_sec` to report. | Let it finish. If your supervisor's stop timeout is *shorter* than that key, it will `SIGKILL` a Control that was draining correctly — the systemd unit in the install guide sets `TimeoutStopSec` above it for exactly this reason. |
+| Control exits **137** on shutdown instead of 0 | The stop grace is shorter than `shutdown_drain_timeout_sec`, so the supervisor killed a drain in progress. Under Compose that is `stop_grace_period` (Docker's default is only **10 s**); under systemd it is `TimeoutStopSec`; if a unit wraps a compose file, **both** apply and the shorter wins. | Raise the grace above the key. Not urgent and never unsafe — §4.2 leave-in-place requeues nothing and marks nothing, and the next boot's rescan recovers the in-flight jobs — but it converts a clean drain into avoidable reclaim work. The `drain_grace` CI gate enforces this for the committed dev file and the documented unit; it cannot see your prod file. |
+| Jobs left in flight after shutdown | Deliberate leave-in-place. The log says so: `N job(s) left in flight and RECOVERABLE (not requeued, not marked)`. | Nothing. The next boot's startup rescan extends their leases so workers can replay; genuinely stuck ones reclaim normally. |
+| `DELETE /v1/admin/accounts/{id}` returns **500**, log says `account_write_error: … send_managed.job_events is append-only: UPDATE forbidden` | **Your schema is behind the binary: migration `0024` is not applied.** This was a real defect from Phase 1 through Phase 10 (G12-OD-1 / ADR-0012) and is **fixed** as of 2026-07-29 by `send_managed_0024`, so on a current schema you will not see it. The mechanism: the account has been assigned a job at least once, so `job_events` holds rows referencing it; the FK's `ON DELETE SET NULL` cleanup is an `UPDATE`, which that table's append-only trigger rejected with no carve-out. Deleting a **worker** with job history failed the same way. An account with **no** job history always deleted `204` — which is why the defect stayed invisible for ten phases. | Check `SELECT version FROM send_managed.schema_migrations ORDER BY version` for `0024`, and run migrations if it is missing (**migrations always lead the Control deploy** — [`install-and-deploy.md`](./install-and-deploy.md) Part 6). Nothing needs cleaning up either way: the delete aborts atomically, so **nothing is dropped, nulled, or corrupted**. Note that hard delete is rarely the right verb operationally — to take an account out of service, `POST /v1/admin/accounts/{id}/disable` (or `/quarantine`) remains the intended lever, reversible and audit-preserving. Reach for `DELETE` only for genuine erasure. |
 
 ---
 
-## `readyz` says `singleton_lock:false` on a Brain that WAS ready (mid-life lock loss)
+## `readyz` says `singleton_lock:false` on a Control that WAS ready (mid-life lock loss)
 
-A Brain can **lose** the singleton advisory lock while running — the lock is session-level, so a
+A Control can **lose** the singleton advisory lock while running — the lock is session-level, so a
 Postgres restart, a failover, a connection reaper, or a stray `pg_terminate_backend` on its lock
 session all drop it. This is a different situation from the startup contention in the table above: the
 process is alive and answering, it simply no longer holds the right to dispatch.
 
-**What the Brain does about it (you usually need to do nothing).** Since 2026-07-29 (G11-OD-1 /
-ADR-0011) a lockless Brain **pauses**: the dispatch, reclaim and retention loops stop claiming,
-pushing, reclaiming, and sweeping — no job is claimed, no credential is pushed, no `sender.*` row is
+**What the Control does about it (you usually need to do nothing).** Since 2026-07-29 (G11-OD-1 /
+ADR-0011) a lockless Control **pauses**: the dispatch, reclaim and retention loops stop claiming,
+pushing, reclaiming, and sweeping — no job is claimed, no credential is pushed, no `send_managed.*` row is
 written by that process. Meanwhile the keeper re-attempts `pg_try_advisory_lock` every
 `brain_singleton_reacquire_interval_sec` (default **5s**). A transient loss therefore self-heals within
 seconds, with no restart and no reconciliation, and dispatch resumes from stored state.
@@ -885,29 +885,29 @@ Confirm which state you are in:
 
 ```bash
 # 1. Is it paused, and for how long? (throttled to ~1 line/minute across all three loops, not a flood)
-journalctl -u sender-brain --since "15 min ago" | grep 'singleton_lock_not_held'
+journalctl -u send_managed-control --since "15 min ago" | grep 'singleton_lock_not_held'
 # 2. Did it lose the lock, and did it get it back on its own? (both halves of the story)
-journalctl -u sender-brain --since "15 min ago" | grep -E 'singleton: (lock connection lost|lock RE-ACQUIRED|re-acquire attempt)'
-# 3. Who holds the lock right now? Zero rows = nobody; a row = a live session, possibly another Brain.
+journalctl -u send_managed-control --since "15 min ago" | grep -E 'singleton: (lock connection lost|lock RE-ACQUIRED|re-acquire attempt)'
+# 3. Who holds the lock right now? Zero rows = nobody; a row = a live session, possibly another Control.
 psql "$DATABASE_URL" -c "SELECT pid, backend_start FROM pg_locks l JOIN pg_stat_activity a USING (pid)
   WHERE l.locktype='advisory' AND ((l.classid::bigint<<32)|l.objid::bigint) = 9200000001"
 ```
 
 | What you see | What it means | What to do |
 |---|---|---|
-| `singleton_lock` flips back to `true` within seconds | Normal recovery. The lock was briefly free (typically a DB restart) and this Brain took it back. | **Nothing.** Dispatch resumed on its own. The paused interval delayed sends; it did not lose or duplicate them. |
-| `re-acquire attempt N failed (lock is held by another Brain …)`, and step 3 shows **another** `pid` | Another Brain acquired the lock while this one was paused. **The pause is doing its job** — this process is dispatching nothing, so there is no split brain. | Decide which Brain you want. Stop the extra one; the survivor keeps (or re-acquires) the lock. Do not "clear" the lock — it is session-level and held by a live session, and it releases even on `SIGKILL`. |
-| `re-acquire attempt N failed (dedicated reconnect failed: …)` | The Brain cannot open its dedicated lock connection at all — the DB is still down or refusing connections. Usually paired with `db:false`. | Fix Postgres; this clears itself. The re-attempt cadence keeps running, so no restart is needed. |
-| `singleton_lock_not_held` repeats with **no** `re-acquire attempt` line at all, and step 3 returns **zero rows** | Nobody holds the lock and this Brain is not even trying. `brain_singleton_reacquire_interval_sec = 0`, which **disables** re-acquisition — also the fail-closed fallback when that config row is unreadable. | Read the boot log: it states which mode is active (`… will PAUSE … and re-attempt every 5s` vs `mid-life re-acquisition DISABLED …`). Set the key to a non-zero value **and restart**. Unlike most config keys, this one is **not** re-read every tick: the Brain reads it once at startup, so a write alone will not take effect on a running process. (A restart re-acquires the lock at startup anyway, which is the faster fix.) |
-| Jobs pile up `queued` during the pause | Expected and correct. A paused Brain refuses to dispatch rather than dispatching without the lock. | Nothing. They dispatch when the lock returns. In-flight jobs are unaffected — see below. |
+| `singleton_lock` flips back to `true` within seconds | Normal recovery. The lock was briefly free (typically a DB restart) and this Control took it back. | **Nothing.** Dispatch resumed on its own. The paused interval delayed sends; it did not lose or duplicate them. |
+| `re-acquire attempt N failed (lock is held by another Control …)`, and step 3 shows **another** `pid` | Another Control acquired the lock while this one was paused. **The pause is doing its job** — this process is dispatching nothing, so there is no split control. | Decide which Control you want. Stop the extra one; the survivor keeps (or re-acquires) the lock. Do not "clear" the lock — it is session-level and held by a live session, and it releases even on `SIGKILL`. |
+| `re-acquire attempt N failed (dedicated reconnect failed: …)` | The Control cannot open its dedicated lock connection at all — the DB is still down or refusing connections. Usually paired with `db:false`. | Fix Postgres; this clears itself. The re-attempt cadence keeps running, so no restart is needed. |
+| `singleton_lock_not_held` repeats with **no** `re-acquire attempt` line at all, and step 3 returns **zero rows** | Nobody holds the lock and this Control is not even trying. `brain_singleton_reacquire_interval_sec = 0`, which **disables** re-acquisition — also the fail-closed fallback when that config row is unreadable. | Read the boot log: it states which mode is active (`… will PAUSE … and re-attempt every 5s` vs `mid-life re-acquisition DISABLED …`). Set the key to a non-zero value **and restart**. Unlike most config keys, this one is **not** re-read every tick: the Control reads it once at startup, so a write alone will not take effect on a running process. (A restart re-acquires the lock at startup anyway, which is the faster fix.) |
+| Jobs pile up `queued` during the pause | Expected and correct. A paused Control refuses to dispatch rather than dispatching without the lock. | Nothing. They dispatch when the lock returns. In-flight jobs are unaffected — see below. |
 
 **Two things deliberately keep working while paused**, and knowing this prevents a wrong diagnosis:
 
-- **The outcome path stays UP.** A box finishing a send it was given *before* the loss can still report,
+- **The outcome path stays UP.** A worker finishing a send it was given *before* the loss can still report,
   and that outcome is persisted. Refusing it would either invent a non-outcome or force a duplicate
-  send later; persisting is idempotent, so a successor Brain cannot double-count it. Expect
-  `sending → sent` transitions from a Brain whose `readyz` says `singleton_lock:false`.
-- **The mTLS listeners and the read surfaces stay UP**, so boxes stay connected and
+  send later; persisting is idempotent, so a successor Control cannot double-count it. Expect
+  `sending → sent` transitions from a Control whose `readyz` says `singleton_lock:false`.
+- **The mTLS listeners and the read surfaces stay UP**, so workers stay connected and
   `/v1/admin/*` + `/v1/describe` keep answering. None of them *claim* work, which is the property the
   pause protects.
 
@@ -916,9 +916,9 @@ failures so a 5s self-healing blip does not page anyone.
 
 ---
 
-## Reading the Brain's log during an incident
+## Reading the Control's log during an incident
 
-The Brain's log is quiet by design: it is **event-driven, not periodic**. A fully idle Brain with an
+The Control's log is quiet by design: it is **event-driven, not periodic**. A fully idle Control with an
 empty queue writes *nothing* — no per-tick heartbeat lines. So if the log is silent, that is not a
 stuck logger; it means nothing happened. A full behavioral test run (53 tests) produces ~40 lines
 total. Consequently, **any line that appears is worth reading** — and a burst of them is itself a
@@ -935,8 +935,8 @@ That second point has an operational consequence: **without log retention, a rep
 and a request id with nothing behind them.** Ship the logs somewhere ([`monitoring.md`](./monitoring.md)).
 
 ```bash
-journalctl -u sender-brain --since "1 hour ago" | grep 'level=error'   # real faults only
-journalctl -u sender-brain | grep 'req_abc123…'                        # one caller's report
+journalctl -u send_managed-control --since "1 hour ago" | grep 'level=error'   # real faults only
+journalctl -u send_managed-control | grep 'req_abc123…'                        # one caller's report
 ```
 
 A `level=error` line is not automatically an outage — a single `internal_error` on one request is a
@@ -951,7 +951,7 @@ bug to file, not a page. Volume and pattern are what distinguish the two, and th
 |---|---|
 | A config key's meaning, type, or default | [`config-reference.md`](./config-reference.md) |
 | A request/response shape or an error code | [`api-contract.md`](./api-contract.md) |
-| To add/remove a box, redeploy, or roll back | [`install-and-deploy.md`](./install-and-deploy.md) |
+| To add/remove a worker, redeploy, or roll back | [`install-and-deploy.md`](./install-and-deploy.md) |
 | To recover from a disaster or rotate keys | [`disaster-recovery.md`](./disaster-recovery.md) |
 | To size a deployment | [`capacity-planning.md`](./capacity-planning.md) |
 | To wire up monitoring and alerting | [`monitoring.md`](./monitoring.md) |

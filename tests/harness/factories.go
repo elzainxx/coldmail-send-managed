@@ -12,14 +12,14 @@ import (
 )
 
 // acctSeq gives each inserted account a distinct smtp_username so multiple accounts can live in
-// the SAME pool without colliding on the Phase 2 per-pool uniqueness index (sender_0013:
+// the SAME pool without colliding on the Phase 2 per-pool uniqueness index (send_managed_0013:
 // UNIQUE(pool_id, smtp_host, smtp_username)). The AAD/transplant tests only need distinct rows,
 // not distinct credentials, so a unique username per insert satisfies the constraint without
 // changing what those tests exercise.
 var acctSeq atomic.Int64
 
 // Typed factories that insert REAL committed rows into a cloned DB (CLAUDE.md Rule 3 — never
-// mocks). They satisfy the real FKs (public.users, public.job_items, sender.pools) so Phase 1
+// mocks). They satisfy the real FKs (public.users, public.job_items, send_managed.pools) so Phase 1
 // behavioral tests exercise the actual schema, constraints, and triggers.
 
 // SeedUser inserts a real public.users row and returns its id.
@@ -49,12 +49,12 @@ func SeedJobItem(t *testing.T, c *pgx.Conn, campaignID, userID, recipient string
 	return id
 }
 
-// SeedSharedPool inserts a real shared sender.pools row (owner_user_id NULL) and returns its id.
+// SeedSharedPool inserts a real shared send_managed.pools row (owner_user_id NULL) and returns its id.
 func SeedSharedPool(t *testing.T, c *pgx.Conn, userID, name string) string {
 	t.Helper()
 	var id string
 	err := c.QueryRow(context.Background(),
-		`INSERT INTO sender.pools (user_id, kind, name) VALUES ($1, 'shared', $2) RETURNING id`,
+		`INSERT INTO send_managed.pools (user_id, kind, name) VALUES ($1, 'shared', $2) RETURNING id`,
 		userID, name).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed pool: %v", err)
@@ -62,20 +62,20 @@ func SeedSharedPool(t *testing.T, c *pgx.Conn, userID, name string) string {
 	return id
 }
 
-// SeedBox inserts a real sender.boxes row (client-supplied UUID) and returns its id.
-func SeedBox(t *testing.T, c *pgx.Conn, userID string) string {
+// SeedWorker inserts a real send_managed.boxes row (client-supplied UUID) and returns its id.
+func SeedWorker(t *testing.T, c *pgx.Conn, userID string) string {
 	t.Helper()
 	var id string
 	err := c.QueryRow(context.Background(),
-		`INSERT INTO sender.boxes (id, user_id, token_hash) VALUES (gen_random_uuid(), $1, 'x') RETURNING id`,
+		`INSERT INTO send_managed.boxes (id, user_id, token_hash) VALUES (gen_random_uuid(), $1, 'x') RETURNING id`,
 		userID).Scan(&id)
 	if err != nil {
-		t.Fatalf("seed box: %v", err)
+		t.Fatalf("seed worker: %v", err)
 	}
 	return id
 }
 
-// SeedAccount inserts a minimal real sender.accounts row (placeholder credential) and returns
+// SeedAccount inserts a minimal real send_managed.accounts row (placeholder credential) and returns
 // its id. For tests that only need a valid assigned_account_id FK target.
 func SeedAccount(t *testing.T, c *pgx.Conn, userID, poolID string) string {
 	t.Helper()
@@ -87,12 +87,12 @@ func SeedAccount(t *testing.T, c *pgx.Conn, userID, poolID string) string {
 func insertAccountRow(t *testing.T, c *pgx.Conn, userID, poolID string, ct []byte, keyID string, nonce []byte) string {
 	t.Helper()
 	// Unique username per insert so two accounts can share a pool without tripping the Phase 2
-	// per-pool uniqueness index (sender_0013). AAD binding is proven by distinct row ids, not by
+	// per-pool uniqueness index (send_managed_0013). AAD binding is proven by distinct row ids, not by
 	// distinct credentials, so this does not weaken any Phase 1 assertion.
 	username := fmt.Sprintf("user%d@example.com", acctSeq.Add(1))
 	var id string
 	err := c.QueryRow(context.Background(),
-		`INSERT INTO sender.accounts
+		`INSERT INTO send_managed.accounts
 		   (user_id, pool_id, smtp_host, smtp_port, smtp_username, credential_ciphertext, credential_key_id, credential_nonce, from_address)
 		 VALUES ($1,$2,'smtp.example.com',587,$6,$3,$4,$5,'sender@example.com')
 		 RETURNING id`,
@@ -103,7 +103,7 @@ func insertAccountRow(t *testing.T, c *pgx.Conn, userID, poolID string, ct []byt
 	return id
 }
 
-// InsertQueuedJob inserts a real sender.jobs row in state 'queued' via the sanctioned path
+// InsertQueuedJob inserts a real send_managed.jobs row in state 'queued' via the sanctioned path
 // (actor GUC set for the genesis event) and returns its id. Uses a fresh job_item each call
 // (job_item_id is UNIQUE). Runs in one transaction so the genesis-event trigger sees the GUC.
 func InsertQueuedJob(t *testing.T, c *pgx.Conn, userID, campaignID, recipient string) string {
@@ -116,11 +116,11 @@ func InsertQueuedJob(t *testing.T, c *pgx.Conn, userID, campaignID, recipient st
 		t.Fatalf("begin: %v", err)
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, "SELECT set_config('sender.actor', 'system', true)"); err != nil {
+	if _, err := tx.Exec(ctx, "SELECT set_config('send_managed.actor', 'system', true)"); err != nil {
 		t.Fatalf("set actor: %v", err)
 	}
 	err = tx.QueryRow(ctx,
-		`INSERT INTO sender.jobs (job_item_id, campaign_id, user_id, recipient_email, rendered_subject, rendered_body, state, next_attempt_at)
+		`INSERT INTO send_managed.jobs (job_item_id, campaign_id, user_id, recipient_email, rendered_subject, rendered_body, state, next_attempt_at)
 		 VALUES ($1, $2, $3, $4, 'Subject', 'Body', 'queued', NOW()) RETURNING id`,
 		jobItemID, campaignID, userID, recipient).Scan(&id)
 	if err != nil {

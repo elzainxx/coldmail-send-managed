@@ -19,11 +19,16 @@ const SystemUserID = "00000000-0000-0000-0000-000000000000"
 // Server is the operator admin API. It holds the DB pool (as send_managed_app), the Encrypt-only
 // credential Encryptor, and the operator-key Authenticator. It registers its routes on a mux
 // that the Control mounts under /v1/admin/*.
+//
+// handler is what Handler() returns: the mux WRAPPED in methodDispatch, so a method mismatch or an
+// unmatched /v1/admin/* path leaves through the error envelope rather than ServeMux's plain text
+// (fix-plan item 7b). Built once at construction.
 type Server struct {
-	db   *pgxpool.Pool
-	enc  *Encryptor
-	auth *Authenticator
-	mux  *http.ServeMux
+	db      *pgxpool.Pool
+	enc     *Encryptor
+	auth    *Authenticator
+	mux     *http.ServeMux
+	handler http.Handler
 }
 
 // NewServer wires the admin routes. db is the send_managed_app pool (never superuser); enc is the
@@ -34,43 +39,74 @@ func NewServer(db *pgxpool.Pool, enc *Encryptor, auth *Authenticator) *Server {
 	return s
 }
 
-// Handler exposes the mux so the Control can mount it (e.g. under a parent mux).
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler exposes the served handler so the Control can mount it (e.g. under a parent mux).
+//
+// This returns the WRAPPED handler, never s.mux directly — returning the bare mux would silently
+// restore the plain-text 405/404 (every route would still work, so nothing would look broken).
+func (s *Server) Handler() http.Handler { return s.handler }
 
-// routes registers every Phase 2 route (method + path patterns, Go 1.22+ mux). Every route is
-// behind requireAuth (the operator-key gate). Additive-only: routes never rename; later phases
-// add. The served set here must match Docs/api-contract.md (the contract_drift gate).
+// route is one served admin route. adminRoutes() below is the single declaration site: both the
+// real mux and item 7b's method-dispatch shape mux are built from it.
+type route struct {
+	method  string
+	pattern string
+	handler http.HandlerFunc
+}
+
+// adminRoutes is every Phase 2 route (method + path patterns, Go 1.22+ mux). Additive-only: routes
+// never rename; later phases add. The served set here must match Docs/api-contract.md (the
+// contract_drift gate).
+//
+// This was 21 individual s.mux.HandleFunc calls until fix-plan item 7b, which needs the route set as
+// DATA (to build the method-stripped shape mux that distinguishes a wrong verb from a wrong path).
+// The table is otherwise a faithful transcription — same methods, same patterns, same handlers, same
+// order, same grouping comments.
+func (s *Server) adminRoutes() []route {
+	return []route{
+		// Accounts
+		{"POST", "/v1/admin/accounts", s.handleAccountCreate},
+		{"GET", "/v1/admin/accounts", s.handleAccountList},
+		{"GET", "/v1/admin/accounts/{id}", s.handleAccountGet},
+		{"PATCH", "/v1/admin/accounts/{id}", s.handleAccountUpdate},
+		{"DELETE", "/v1/admin/accounts/{id}", s.handleAccountDelete},
+		{"GET", "/v1/admin/accounts/{id}/events", s.handleAccountEvents},
+
+		// Account lifecycle transitions (manual, audited)
+		{"POST", "/v1/admin/accounts/{id}/quarantine", s.handleAccountQuarantine},
+		{"POST", "/v1/admin/accounts/{id}/unquarantine", s.handleAccountUnquarantine},
+		{"POST", "/v1/admin/accounts/{id}/disable", s.handleAccountDisable},
+		{"POST", "/v1/admin/accounts/{id}/enable", s.handleAccountEnable},
+		{"POST", "/v1/admin/accounts/{id}/pause", s.handleAccountPause},
+		{"POST", "/v1/admin/accounts/{id}/unpause", s.handleAccountUnpause},
+
+		// Pools
+		{"POST", "/v1/admin/pools", s.handlePoolCreate},
+		{"GET", "/v1/admin/pools", s.handlePoolList},
+		{"GET", "/v1/admin/pools/{id}", s.handlePoolGet},
+		{"PATCH", "/v1/admin/pools/{id}", s.handlePoolUpdate},
+		{"DELETE", "/v1/admin/pools/{id}", s.handlePoolDelete},
+
+		// Config
+		{"GET", "/v1/admin/config", s.handleConfigList},
+		{"GET", "/v1/admin/config/{key}", s.handleConfigGet},
+		{"PUT", "/v1/admin/config/{key}", s.handleConfigPut},
+
+		// Observability (Phase 9.5 B3/B4, §3)
+		{"GET", "/v1/admin/health", s.handleHealth},
+	}
+}
+
+// routes mounts every adminRoutes() entry behind requireAuth (the operator-key gate) and builds
+// item 7b's method-dispatch wrapper from the SAME table. No route reaches s.mux.HandleFunc any
+// other way, so a route present in adminRoutes() is structurally guaranteed to be authenticated
+// AND to have a shape entry deciding 405-vs-404 for it.
 func (s *Server) routes() {
-	// Accounts
-	s.mux.HandleFunc("POST /v1/admin/accounts", s.requireAuth(s.handleAccountCreate))
-	s.mux.HandleFunc("GET /v1/admin/accounts", s.requireAuth(s.handleAccountList))
-	s.mux.HandleFunc("GET /v1/admin/accounts/{id}", s.requireAuth(s.handleAccountGet))
-	s.mux.HandleFunc("PATCH /v1/admin/accounts/{id}", s.requireAuth(s.handleAccountUpdate))
-	s.mux.HandleFunc("DELETE /v1/admin/accounts/{id}", s.requireAuth(s.handleAccountDelete))
-	s.mux.HandleFunc("GET /v1/admin/accounts/{id}/events", s.requireAuth(s.handleAccountEvents))
-
-	// Account lifecycle transitions (manual, audited)
-	s.mux.HandleFunc("POST /v1/admin/accounts/{id}/quarantine", s.requireAuth(s.handleAccountQuarantine))
-	s.mux.HandleFunc("POST /v1/admin/accounts/{id}/unquarantine", s.requireAuth(s.handleAccountUnquarantine))
-	s.mux.HandleFunc("POST /v1/admin/accounts/{id}/disable", s.requireAuth(s.handleAccountDisable))
-	s.mux.HandleFunc("POST /v1/admin/accounts/{id}/enable", s.requireAuth(s.handleAccountEnable))
-	s.mux.HandleFunc("POST /v1/admin/accounts/{id}/pause", s.requireAuth(s.handleAccountPause))
-	s.mux.HandleFunc("POST /v1/admin/accounts/{id}/unpause", s.requireAuth(s.handleAccountUnpause))
-
-	// Pools
-	s.mux.HandleFunc("POST /v1/admin/pools", s.requireAuth(s.handlePoolCreate))
-	s.mux.HandleFunc("GET /v1/admin/pools", s.requireAuth(s.handlePoolList))
-	s.mux.HandleFunc("GET /v1/admin/pools/{id}", s.requireAuth(s.handlePoolGet))
-	s.mux.HandleFunc("PATCH /v1/admin/pools/{id}", s.requireAuth(s.handlePoolUpdate))
-	s.mux.HandleFunc("DELETE /v1/admin/pools/{id}", s.requireAuth(s.handlePoolDelete))
-
-	// Config
-	s.mux.HandleFunc("GET /v1/admin/config", s.requireAuth(s.handleConfigList))
-	s.mux.HandleFunc("GET /v1/admin/config/{key}", s.requireAuth(s.handleConfigGet))
-	s.mux.HandleFunc("PUT /v1/admin/config/{key}", s.requireAuth(s.handleConfigPut))
-
-	// Observability (Phase 9.5 B3/B4, §3)
-	s.mux.HandleFunc("GET /v1/admin/health", s.requireAuth(s.handleHealth))
+	rs := s.adminRoutes()
+	for _, rt := range rs {
+		s.mux.HandleFunc(rt.method+" "+rt.pattern, s.requireAuth(rt.handler))
+	}
+	shape, allow := buildShapeMux(rs)
+	s.handler = s.methodDispatch(s.mux, shape, allow)
 }
 
 // fail writes the clean external envelope for e and logs the internal reason against rid. It is

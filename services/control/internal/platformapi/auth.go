@@ -111,12 +111,31 @@ func logLevelFor(code string) string {
 	return "error"
 }
 
-// sanitizePath keeps only the route shape (no query string, which could carry ids).
+// sanitizePath keeps only the route shape (no query string, which could carry ids) and neutralizes
+// any control character in the path.
+//
+// THE CONTROL-CHARACTER STRIP IS A REAL FIX, NOT DEFENSIVENESS. r.URL.Path is the DECODED path, so
+// a request line of `GET /v1/admin/config/x%0Aplatformapi%20error%20rid=FORGED%20level=error`
+// arrives with a literal newline inside a matched wildcard segment. Every log line here is one
+// Printf, so that newline SPLITS THE LINE and the remainder is indistinguishable from a genuine log
+// entry. Reproduced against the live stack before this fix: one curl produced a second log line
+// reading `platformapi error rid=FORGED level=error`, which an operator grepping during an incident
+// would read as a real 500 with a real request id.
+//
+// The defect predates item 7b, but 7b widens the exposure — the mux fallbacks below log
+// ARBITRARY unmatched paths, not just paths that matched a registered pattern — so it is fixed here
+// rather than left for the caller to notice. Every control byte becomes '?': the logged path stays
+// human-readable and stays ONE line, which is the property the request_id correlation depends on.
 func sanitizePath(p string) string {
 	if i := strings.IndexByte(p, '?'); i >= 0 {
-		return p[:i]
+		p = p[:i]
 	}
-	return p
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return '?'
+		}
+		return r
+	}, p)
 }
 
 // context helpers -----------------------------------------------------------------------------

@@ -5,8 +5,12 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/coldmail-send-managed/control/internal/db"
@@ -45,8 +49,65 @@ func NewHealthServer(addr string, database *db.DB, guard *singleton.Guard, admin
 		mux.Handle("/v1/report", platformHandler)
 		mux.Handle("/v1/describe", platformHandler)
 	}
+	// Catch-all: anything this mux does not route (an unknown path, or a known path when its surface
+	// is unmounted) answers the CODED envelope rather than ServeMux's `404 page not found` text
+	// (fix-plan item 7b / audit D17). Without it, only paths reaching a mounted sub-surface got a
+	// coded 404 and every other miss returned plain text with no request_id — so a client's
+	// `error.code` branch worked or nil-deref'd depending on which path it typo'd.
+	//
+	// This is the ROOT mux's own fallback, deliberately not delegated to either sub-surface: at this
+	// level there is no route table to compare against, so there is no 405-vs-404 distinction to
+	// make. A wrong VERB on a real route never reaches here (the sub-surface's own dispatch owns
+	// that, and it is the only layer that knows which methods a path serves).
+	//
+	// The two health routes are registered WITHOUT a method above, so they accept any verb and never
+	// fall through to this handler — an unchanged pre-existing property, not something 7b relaxed.
+	mux.HandleFunc("/", handleNoRoute)
 	h.http = &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	return h
+}
+
+// handleNoRoute answers an unrouted path with the coded envelope. It mints its own request_id: no
+// sub-surface auth or handler ran, so there is none to inherit — which is exactly why the plain-text
+// default had no id to report.
+//
+// The path is NOT echoed into the body (nothing a caller sends is reflected) and the logged path has
+// its control bytes neutralized — an arbitrary unmatched path reaches this log line, and a decoded
+// %0A would otherwise forge a second log entry (the same live defect fixed in both api packages'
+// sanitizePath).
+func handleNoRoute(w http.ResponseWriter, r *http.Request) {
+	rid := newRequestID()
+	log.Printf("control request_id=%s method=%s path=%s outcome=error code=not_found reason=root_mux_no_route level=warn",
+		rid, r.Method, sanitizeLogPath(r.URL.Path))
+	writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]any{
+		"code":       "not_found",
+		"message":    "The requested resource was not found.",
+		"request_id": rid,
+	}})
+}
+
+// newRequestID mints an opaque correlation id in the same `req_<32 hex>` shape as the two API
+// packages, so one log-grep pattern serves all three surfaces.
+func newRequestID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "req_0000000000000000"
+	}
+	return "req_" + hex.EncodeToString(b[:])
+}
+
+// sanitizeLogPath drops any query string and neutralizes control characters, so one request can
+// never write two log lines.
+func sanitizeLogPath(p string) string {
+	if i := strings.IndexByte(p, '?'); i >= 0 {
+		p = p[:i]
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return '?'
+		}
+		return r
+	}, p)
 }
 
 func (h *HealthServer) ListenAndServe() error            { return h.http.ListenAndServe() }

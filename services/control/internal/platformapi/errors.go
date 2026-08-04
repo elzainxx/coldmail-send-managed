@@ -9,11 +9,12 @@ import (
 
 // External status codes (§6 / two-vocabulary rule). Additive-only; never rename/repurpose.
 const (
-	codeValidationFailed = "validation_failed" // 400
-	codeUnauthenticated  = "unauthenticated"   // 401
-	codeNotFound         = "not_found"         // 404
-	codeConflict         = "conflict"          // 409
-	codeInternalError    = "internal_error"    // 500
+	codeValidationFailed = "validation_failed"  // 400
+	codeUnauthenticated  = "unauthenticated"    // 401
+	codeNotFound         = "not_found"          // 404
+	codeMethodNotAllowed = "method_not_allowed" // 405 (additive, fix-plan item 7b / audit D17)
+	codeConflict         = "conflict"           // 409
+	codeInternalError    = "internal_error"     // 500
 )
 
 // issue slugs — the fixed field-level vocabulary (never free-text echoing input). The full
@@ -29,6 +30,7 @@ var fixedMessages = map[string]string{
 	codeValidationFailed: "One or more fields are invalid.",
 	codeUnauthenticated:  "Missing or invalid platform service token.",
 	codeNotFound:         "The requested resource was not found.",
+	codeMethodNotAllowed: "This method is not allowed on this path.",
 	codeConflict:         "The request conflicts with the current state.",
 	codeInternalError:    "An unexpected error occurred.",
 }
@@ -37,6 +39,7 @@ var codeStatus = map[string]int{
 	codeValidationFailed: http.StatusBadRequest,
 	codeUnauthenticated:  http.StatusUnauthorized,
 	codeNotFound:         http.StatusNotFound,
+	codeMethodNotAllowed: http.StatusMethodNotAllowed,
 	codeConflict:         http.StatusConflict,
 	codeInternalError:    http.StatusInternalServerError,
 }

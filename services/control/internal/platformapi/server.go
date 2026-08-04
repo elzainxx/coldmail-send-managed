@@ -32,11 +32,16 @@ type Kicker func()
 
 // Server is the platform API. It holds the DB pool (send_managed_app), the service-token
 // authenticator, and an async dispatcher kick.
+//
+// handler is what Handler() returns: the mux WRAPPED in methodDispatch, so a method mismatch or an
+// unmatched path leaves through the error envelope instead of ServeMux's plain text (fix-plan item
+// 7b). It is built once at construction, not per request.
 type Server struct {
-	db   *pgxpool.Pool
-	auth *Authenticator
-	kick Kicker
-	mux  *http.ServeMux
+	db      *pgxpool.Pool
+	auth    *Authenticator
+	kick    Kicker
+	mux     *http.ServeMux
+	handler http.Handler
 }
 
 // NewServer wires the Domain-A routes. kick may be nil (run still succeeds; the dispatcher's own
@@ -47,16 +52,29 @@ func NewServer(db *pgxpool.Pool, auth *Authenticator, kick Kicker) *Server {
 	return s
 }
 
-// Handler exposes the mux for mounting under /v1/* on the Control's HTTP server.
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler exposes the served handler for mounting under /v1/* on the Control's HTTP server.
+//
+// This returns the WRAPPED handler, never s.mux directly: returning the bare mux would restore the
+// plain-text 405/404 that item 7b exists to remove, and it would do so silently — every route
+// would still work. That is why the wrapper is built in routes() and stored, rather than composed
+// at each call site that mounts this surface.
+func (s *Server) Handler() http.Handler { return s.handler }
 
-// routes registers the four Phase-3 platform routes (Go 1.22+ method+path patterns), each behind
-// the service-token gate. Additive-only; the served set must match Docs/api-contract.md.
+// routes registers the platform routes (Go 1.22+ method+path patterns), each behind the
+// service-token gate, and builds the method-dispatch wrapper from the SAME table (item 7b).
+// Additive-only; the served set must match Docs/api-contract.md.
+//
+// platformRoutes() is the single declaration site: nothing reaches s.mux.HandleFunc except this
+// loop, so a route is structurally guaranteed to be (a) authenticated and (b) present in the shape
+// mux that decides 405-vs-404 — the same "one call site can register a route at all" discipline
+// adminapi's route table uses.
 func (s *Server) routes() {
-	s.mux.HandleFunc("POST /v1/quote", s.requireAuth(s.handleQuote))
-	s.mux.HandleFunc("POST /v1/run", s.requireAuth(s.handleRun))
-	s.mux.HandleFunc("GET /v1/report", s.requireAuth(s.handleReport))
-	s.mux.HandleFunc("GET /v1/describe", s.requireAuth(s.handleDescribe))
+	rs := s.platformRoutes()
+	for _, rt := range rs {
+		s.mux.HandleFunc(rt.method+" "+rt.pattern, s.requireAuth(rt.handler))
+	}
+	shape, allow := buildShapeMux(rs)
+	s.handler = s.methodDispatch(s.mux, shape, allow)
 }
 
 // dbCtx bounds a per-request DB operation.

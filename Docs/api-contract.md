@@ -76,11 +76,43 @@ The full, additive-only `error.code` enum:
 | 400 | `config_ordering_violation` | A config `PUT` would break one of the two ordering invariants (`Docs/config-reference.md`) — enforced at the `PUT` boundary itself (rejected before the value lands) AND independently re-checked at config-LOAD as a defense-in-depth backstop (`Docs/history/open-decisions.md` P9-OD-2, RULED-AND-CLOSED). |
 | 401 | `unauthenticated` | Missing/invalid API key/token, either domain. |
 | 403 | `forbidden` | Reserved for future scoped roles; unused in V1's single-scope model. |
-| 404 | `not_found` | Resource id / config key does not exist, OR belongs to another tenant (no existence disclosure — never `403`). |
+| 404 | `not_found` | Resource id / config key does not exist, OR belongs to another tenant (no existence disclosure — never `403`). Also an unrouted path, on either domain and on the root mux. |
+| 405 | `method_not_allowed` | The path exists but does not serve the request's method. Carries an `Allow` header listing the verbs it does serve. Decided by the mux, so it is answered **before** auth and is credential-independent. |
 | 409 | `conflict` | State/RI conflict (delete pool with accounts; duplicate within pool; limit-below-counter; system user unprovisioned; duplicate active campaign for a user). |
 | 422 | `unprocessable` | Well-formed but semantically illegal (illegal state transition, fallback cycle, owner-rule violation). |
 | 429 | `rate_limited` | Admin rate limit — off by default in V1. |
 | 500 | `internal_error` | Unexpected. Generic message only; reason in logs. |
+
+### The envelope covers ROUTING failures too, not only handler failures
+
+`request_id` is mandatory on every error — including the two the HTTP router decides before any
+handler or credential check runs. Until 2026-08-04 that clause was false: `net/http.ServeMux`
+answered a wrong verb and an unrouted path with its own `405 Method Not Allowed` / `404 page not
+found` as `text/plain`, with no `code` and no `request_id`, so a client branching on
+`body.error.code` for every non-2xx nil-deref'd depending on which path or verb it got wrong.
+No gate noticed, because the route probes call each path with its method-appropriate verb only.
+Both now leave through the same envelope as every other error (fix-plan item 7b / audit D17):
+
+| Request | Reply |
+|---|---|
+| a verb the path does not serve | `405 method_not_allowed` + `Allow: <verbs>` |
+| a path no surface serves | `404 not_found`, no `Allow` |
+| a documented path whose surface is unmounted (its credential unconfigured, fail-closed) | `404 not_found` — the root mux answers, since the surface is absent |
+
+Properties a client may rely on:
+
+- **Both are unauthenticated**, exactly as the plain-text replies were. The router decides before the
+  credential is inspected, so the answer is identical with a valid key, an invalid one, or none. This
+  discloses no more than the surface already did (a mounted route answers `401`, a missing one `404`);
+  only the SHAPE of the reply changed. It is unrelated to the cross-tenant rule, which is about DATA:
+  another tenant's job id is still `404`, never `403`.
+- **`Allow` appears on a `405` and never on a `404`** — a `404` must not imply the path exists under
+  some other verb. `Allow` advertises `HEAD` wherever `GET` is served, because a `GET` route answers
+  `HEAD`.
+- **The path is never echoed** into the body, and a wrong verb on a wildcard route reports the
+  *pattern* internally, never the caller's id. The message is the fixed sentence for the code.
+- **Trailing slashes and case are not routes.** `POST /v1/quote/` and `/v1/QUOTE` are `404`, not
+  `405`: `/v1/quote` is the served path and neither of those is it.
 
 ## Phase 0 served routes (SKELETON only)
 
@@ -397,8 +429,9 @@ failure additive-only versioning was meant to prevent.
 - **`error_codes[]`** — every code this module can emit with the HTTP status it maps to
   (`[{code, http_status}]`, sorted by status then code), **DERIVED by walking the same `codeStatus`
   map `writeError` resolves a status from**. It therefore cannot list a code the module cannot emit,
-  nor omit one it can. This surface emits **five** (`validation_failed`, `unauthenticated`,
-  `not_found`, `conflict`, `internal_error`) — a subset of the union table above, which also carries
+  nor omit one it can. This surface emits **six** (`validation_failed`, `unauthenticated`,
+  `not_found`, `method_not_allowed`, `conflict`, `internal_error`) — a subset of the union table
+  above, which also carries
   `adminapi`'s `config_ordering_violation` and the reserved `forbidden`/`unprocessable`/
   `rate_limited`. Module 3 emits seven at the same `/v1`; the two sets differ legitimately (it has a
   batch endpoint and a rate-limited test button), and a client that can read both lists needs no

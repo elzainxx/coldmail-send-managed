@@ -44,12 +44,34 @@ func (s *Server) logOK(rid string, r *http.Request, detail string) {
 }
 
 // sanitizePath strips any query string from the logged path (query params are not expected to
-// carry secrets on this surface, but bodies/queries are never logged verbatim regardless).
+// carry secrets on this surface, but bodies/queries are never logged verbatim regardless) and
+// neutralizes any control character in what remains.
+//
+// THE CONTROL-CHARACTER STRIP CLOSES A LIVE LOG-FORGERY HOLE, reproduced against the running stack
+// before it was written. r.URL.Path is the DECODED path, and `{key}`/`{id}` wildcards match
+// whatever a caller puts in that segment, so:
+//
+//	curl 'http://control/v1/admin/config/x%0Aplatformapi%20error%20rid=FORGED%20level=error'
+//
+// produced TWO log lines — the genuine truncated one, and a second reading
+// `platformapi error rid=FORGED level=error` that is byte-indistinguishable from a real platformapi
+// 500. An operator grepping by request_id during an incident would chase an event that never
+// happened. Every log line on this surface is one Printf, so one decoded newline is all it takes.
+//
+// Mapping every control byte to '?' keeps the line readable AND keeps it a single line, which is
+// what request_id correlation depends on. Found while auditing the mux-fallback logging added for
+// fix-plan item 7b (that path logs arbitrary unmatched paths, widening the same exposure).
 func sanitizePath(p string) string {
 	if i := indexByte(p, '?'); i >= 0 {
-		return p[:i]
+		p = p[:i]
 	}
-	return p
+	out := []rune(p)
+	for i, r := range out {
+		if r < 0x20 || r == 0x7f {
+			out[i] = '?'
+		}
+	}
+	return string(out)
 }
 
 func indexByte(s string, b byte) int {

@@ -26,6 +26,79 @@ rc="$(probe /v1/worker/register "{\"box_id\":\"dev-worker-1\",\"token\":\"$WORKE
 rc="$(probe /v1/worker/heartbeat '{"box_id":"dev-worker-1"}')"
 [[ "$rc" == "200" ]] || { echo "contract_drift FAIL: POST /v1/worker/heartbeat not served as documented (got $rc)"; fail=1; }
 
+# --- Wrong-verb dispatch: a method mismatch leaves through the ERROR ENVELOPE (item 7b / audit D17) ---
+# Before that fix, every route answered a wrong verb with net/http.ServeMux's OWN reply —
+# `405 Method Not Allowed` as text/plain, no `code`, no `request_id` — so a client doing
+# body.error.code on any non-2xx nil-deref'd, and the contract's "request_id is mandatory on every
+# error" clause was simply false. NOTHING CAUGHT IT because both route loops below probe each path
+# with its METHOD-APPROPRIATE verb only, which is precisely how the defect survived to the audit.
+# The checks are therefore written here, against the SAME derived arrays, rather than as a separate
+# hand-written list that could drift from the served surface.
+#
+# OPTIONS is the wrong verb throughout: Go's ServeMux does not auto-answer it, and no route on
+# either surface serves it — asserted per path, so this can never silently degrade into a no-op.
+#
+# Probed WITHOUT a credential on purpose. The mux answers before requireAuth, so a 405 here is also
+# the on-the-wire proof that the reply is credential-independent (the Go tests pin the same ordering
+# in-process). That is the one ordering an operator can misread from logs alone.
+#
+# NOTE ON THE STATUS AND Allow ASSERTIONS: ServeMux's OWN plain-text 405 also returns 405 and also
+# sets Allow, so those two lines do NOT fail on an unfixed binary — verified by running this gate
+# against a pre-7b container, where every envelope assertion fired and neither of those did. They are
+# kept because they pin the OTHER regressions (a wrong verb collapsing to 404/401/200, or an Allow
+# that drifts from the route table), which the envelope checks would not catch.
+wv_n=0
+wv_fail=0
+raw_probe() { # $1=method $2=path -> response headers + body + a trailing HTTPCODE:nnn line
+  curl -s -i -X "$1" -w '\nHTTPCODE:%{http_code}' "http://localhost:8080$2" 2>/dev/null || true
+}
+wv_bad() { # record a wrong-verb failure in BOTH the gate status and the wrong-verb-specific one, so
+           # the summary line below cannot claim "proved on N paths" while assertions were firing.
+  echo "contract_drift FAIL: $1"; fail=1; wv_fail=1
+}
+assert_wrong_verb_envelope() { # $1=path $2=space-separated methods the contract serves on it
+  local p="$1" served="$2" raw code allow m
+  case " $served " in
+    *" OPTIONS "*)
+      wv_bad "$p serves OPTIONS, so the wrong-verb probe for it is a no-op — this check must use a verb the path does not serve"
+      return ;;
+  esac
+  raw="$(raw_probe OPTIONS "$p")"
+  code="$(grep -oE 'HTTPCODE:[0-9]+' <<<"$raw" | tail -1 | cut -d: -f2 || true)"
+  wv_n=$((wv_n + 1))
+
+  [[ "$code" == "405" ]] || wv_bad "OPTIONS $p returned ${code:-no-response}, want 405 — a wrong verb on a real path must be method_not_allowed, not 404/401/200"
+  grep -qiE '^content-type:[[:space:]]*application/json' <<<"$raw" || wv_bad "OPTIONS $p is not application/json — ServeMux's plain-text 405 is back"
+  # The exact regression signature. The STATUS LINE also reads "405 Method Not Allowed", so this is
+  # anchored to a whole line: only ServeMux's body is that string on its own.
+  if grep -qE '^Method Not Allowed\r?$' <<<"$raw"; then
+    wv_bad "OPTIONS $p body is ServeMux's plain text, not the envelope"
+  fi
+  grep -q '"code":"method_not_allowed"' <<<"$raw" || wv_bad "OPTIONS $p carries no error.code=method_not_allowed"
+  grep -qE '"request_id":"req_[0-9a-f]{32}"' <<<"$raw" || wv_bad "OPTIONS $p carries no request_id in the req_<32hex> shape all three surfaces mint"
+  # Two-vocabulary rule: the internal reason is logged against the request_id, never serialized.
+  if grep -q 'mux_method_not_allowed' <<<"$raw"; then
+    wv_bad "OPTIONS $p serializes the INTERNAL reason (two-vocabulary rule)"
+  fi
+  # A wildcard route must report the PATTERN, never the caller's id, or the 405 becomes a reflector.
+  if grep -q '00000000-0000' <<<"$raw"; then
+    wv_bad "OPTIONS $p echoes the caller-supplied id back in the response"
+  fi
+  # RFC 9110 requires Allow on a 405, and it must advertise every verb the contract serves on this
+  # path — derived from the route array, so an Allow that goes stale against the table fails here.
+  allow="$(grep -iE '^allow:' <<<"$raw" | tr -d '\r' | cut -d: -f2- || true)"
+  if [[ -z "$allow" ]]; then
+    wv_bad "OPTIONS $p has no Allow header — a client told 405 has no way to learn the right verb"
+  else
+    for m in $served; do
+      case " $(tr ',' ' ' <<<"$allow") " in
+        *" $m "*) ;;
+        *) wv_bad "OPTIONS $p Allow=\"$allow\" omits $m, which the contract serves on this path" ;;
+      esac
+    done
+  fi
+}
+
 # --- Phase 2 operator admin routes (Domain B) ---
 # These are behind the operator-key gate. Probed WITHOUT a key: a real, mounted route answers
 # 401 unauthenticated (route exists but gated); a missing route would 404. So 401 proves the
@@ -66,12 +139,31 @@ if [[ "$adm_probe" == "401" ]]; then
   # An UNDOCUMENTED admin path must NOT be gated as a real route — it should 404 (no handler).
   und_adm="$(adm GET /v1/admin/secret-undocumented)"
   [[ "$und_adm" == "404" ]] || { echo "contract_drift FAIL: undocumented admin path returned $und_adm, want 404 — surface wider than the contract"; fail=1; }
+  # ...and it must 404 through the ENVELOPE, not ServeMux's text. Same class of miss as the 405: the
+  # code above proved the STATUS, which a plain-text reply also satisfies.
+  und_raw="$(raw_probe GET /v1/admin/secret-undocumented)"
+  grep -q '"code":"not_found"' <<<"$und_raw" || wv_bad "the admin 404 for an unknown path carries no error.code=not_found"
+  grep -qE '"request_id":"req_[0-9a-f]{32}"' <<<"$und_raw" || wv_bad "the admin 404 for an unknown path carries no request_id"
+  if grep -qiE '^allow:' <<<"$und_raw"; then
+    wv_bad "the admin 404 for an unknown path carries an Allow header — that implies the path exists with other verbs"
+  fi
+
+  # Wrong-verb envelope on every admin path, with the served method set DERIVED from ADMIN_ROUTES
+  # (one probe per distinct path, since Allow is a property of the path).
+  declare -A ADMIN_PATH_METHODS=()
+  for spec in "${!ADMIN_ROUTES[@]}"; do
+    m="${spec%% *}"; p="${spec#* }"
+    ADMIN_PATH_METHODS["$p"]="${ADMIN_PATH_METHODS[$p]:-} $m"
+  done
+  for p in "${!ADMIN_PATH_METHODS[@]}"; do
+    assert_wrong_verb_envelope "$p" "${ADMIN_PATH_METHODS[$p]}"
+  done
   # DERIVED from the array, not written as a literal. This line said "22 routes" while ADMIN_ROUTES
   # held 21 entries: the gate was checking the right number of routes and REPORTING the wrong one, so
   # the green line was misleading evidence rather than a failure. That is the print-only drift class
   # already recorded twice in Docs/history (phase-1-schema-delta.md, phase-2-strip-shared-pool.md) —
   # a count that reads ${#ADMIN_ROUTES[@]} cannot drift from the set it describes.
-  echo "contract_drift: Phase 2+9.5 admin surface mounted — ${#ADMIN_ROUTES[@]} routes gated (401), undocumented 404."
+  echo "contract_drift: Phase 2+9.5 admin surface mounted — ${#ADMIN_ROUTES[@]} routes gated (401), undocumented 404, ${#ADMIN_PATH_METHODS[@]} distinct paths wrong-verb-probed."
 else
   echo "contract_drift: admin surface not mounted (GET /v1/admin/accounts -> $adm_probe); skipping Phase 2 route checks (set ADMIN_API_KEY_HASHES to enable)."
 fi
@@ -91,10 +183,21 @@ if [[ "$pf_probe" == "401" ]]; then
     rc="$(pf "$m" "$p")"
     [[ "$rc" == "401" ]] || { echo "contract_drift FAIL: $m $p served as $rc, want 401 (platform route missing or not gated)"; fail=1; }
   done
+  # Wrong-verb envelope on every platform path (item 7b). The two surfaces are SEPARATE packages by
+  # OD-7 isolation, each resolving the code against its own codeStatus map, so proving it on one says
+  # nothing about the other — both are probed.
+  declare -A PLATFORM_PATH_METHODS=()
+  for spec in "${!PLATFORM_ROUTES[@]}"; do
+    m="${spec%% *}"; p="${spec#* }"
+    PLATFORM_PATH_METHODS["$p"]="${PLATFORM_PATH_METHODS[$p]:-} $m"
+  done
+  for p in "${!PLATFORM_PATH_METHODS[@]}"; do
+    assert_wrong_verb_envelope "$p" "${PLATFORM_PATH_METHODS[$p]}"
+  done
   # Derived for the same reason as the admin line above. This one happens to be correct today (4
   # entries, 4 claimed), which is exactly why it is worth deriving — a correct literal is one edit away
   # from being a wrong one, and nothing would catch it.
-  echo "contract_drift: Phase 3 platform surface mounted — ${#PLATFORM_ROUTES[@]} routes gated (401)."
+  echo "contract_drift: Phase 3 platform surface mounted — ${#PLATFORM_ROUTES[@]} routes gated (401), ${#PLATFORM_PATH_METHODS[@]} distinct paths wrong-verb-probed."
 else
   echo "contract_drift: platform surface not mounted (POST /v1/run -> $pf_probe); skipping Phase 3 route checks (set PLATFORM_TOKEN_HASHES to enable)."
 fi
@@ -222,6 +325,49 @@ fi
 # --- No undocumented route: a path NOT in the contract must 404 ---
 und="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/undocumented-nonadmin 2>/dev/null || echo 000)"
 [[ "$und" == "404" ]] || { echo "contract_drift FAIL: undocumented path did not 404 (got $und) — surface wider than the contract"; fail=1; }
+
+# ...and through the ENVELOPE. This path reaches neither sub-surface: the ROOT mux routes only
+# /healthz, /readyz, the /v1/admin/ prefix and the four exact platform paths, so this is the one
+# probe that exercises the root mux's own coded fallback (item 7b's third surface). That surface is
+# the widest exposure of the three — it is also what answers a REAL documented path when its
+# credential is unconfigured and the surface therefore does not mount — and until this line nothing
+# in the gate layer touched it.
+root_fail=0
+root_bad() { echo "contract_drift FAIL: $1"; fail=1; root_fail=1; }
+und_root="$(raw_probe GET /v1/undocumented-nonadmin)"
+grep -qiE '^content-type:[[:space:]]*application/json' <<<"$und_root" || root_bad "the root-mux 404 is not application/json — ServeMux's plain text is back"
+if grep -qE '^404 page not found\r?$' <<<"$und_root"; then
+  root_bad "the root-mux 404 body is ServeMux's plain text, not the envelope"
+fi
+grep -q '"code":"not_found"' <<<"$und_root" || root_bad "the root-mux 404 carries no error.code=not_found"
+grep -qE '"request_id":"req_[0-9a-f]{32}"' <<<"$und_root" || root_bad "the root-mux 404 carries no request_id in the shape the two API packages mint — one log-grep must serve all three surfaces"
+# Nothing the caller sent may be reflected into the body.
+if grep -q 'undocumented-nonadmin' <<<"$und_root"; then
+  root_bad "the root-mux 404 echoes the requested path back into the response"
+fi
+# `if`, not `[[ ... ]] && echo`: on the FAILING path that compound returns 1, and under this file's
+# set -e that would kill the gate before the doc-lockstep loop below ever ran — the inverted-guard
+# trap already documented at the excluded-vocabulary loop.
+if [[ "$root_fail" -eq 0 ]]; then
+  echo "contract_drift: root-mux fallback answers the coded 404 (JSON, not_found, request_id, no path reflected)."
+fi
+
+# The wrong-verb assertions above run inside the two `if surface mounted` blocks. If BOTH surfaces
+# were unmounted, every one of them would be skipped and this gate would still print OK — the
+# vacuity class this file's other counts already guard against. Say so out loud instead.
+#
+# The claim is guarded by wv_fail, not printed unconditionally: an earlier draft of this line said
+# "proved on N paths" using only the counter, and against a pre-7b container it printed that sentence
+# in the same output as 60 FAIL lines. A summary that can assert a property while its own assertions
+# are failing is worse than no summary — it is the misleading-green class this file already carries
+# two notes about.
+if [[ "$wv_n" -eq 0 ]]; then
+  echo "contract_drift: NO wrong-verb checks ran — both API surfaces are unmounted, so item 7b is UNPROVEN by this run (set ADMIN_API_KEY_HASHES and PLATFORM_TOKEN_HASHES)."
+elif [[ "$wv_fail" -eq 0 ]]; then
+  echo "contract_drift: wrong-verb dispatch proved on $wv_n paths (405 + coded envelope + request_id + Allow derived from the route table)."
+else
+  echo "contract_drift: wrong-verb dispatch FAILED on some of the $wv_n paths probed (see the FAIL lines above) — item 7b is regressed."
+fi
 
 # --- The contract doc actually lists these routes (doc <-> served lockstep) ---
 for r in "/healthz" "/readyz" "/v1/worker/register" "/v1/worker/heartbeat" \

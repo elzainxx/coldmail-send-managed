@@ -48,6 +48,19 @@ var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[
 
 type quoteReq struct {
 	RecipientCount *int `json:"recipient_count"`
+	// UserID is ACCEPTED AND IGNORED (audit D4 / fix-plan item 5). It exists so that ONE request body
+	// works against both senders' quote. Module 3's quote requires user_id — correctly, since its
+	// answer is a per-user feasibility assessment — and both modules decode with
+	// DisallowUnknownFields, so before this field there was NO body both accepted:
+	// {recipient_count} → M2 OK / M3 400, {recipient_count, user_id} → M3 OK / M2 400.
+	//
+	// FIXED HERE RATHER THAN IN MODULE 3, deliberately. M3's requirement is the right one for its
+	// answer, and dropping it would break its feasibility block. Making user_id REQUIRED here would
+	// break every existing M2 caller, which Rule 5 (additive-only) forbids outright. So M2 widens
+	// what it TOLERATES and changes nothing about what it computes: M2's cost is
+	// recipient_count × unit_price_credits with no tenant term in it, and inventing one to justify the
+	// field would be a behaviour change smuggled in under an alignment fix.
+	UserID string `json:"user_id"`
 }
 
 func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +85,19 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 	if *req.RecipientCount < 0 {
 		s.fail(w, r, newErr(codeValidationFailed, "recipient_count_negative").
 			withDetails(fieldDetail{Field: "recipient_count", Issue: issueOutOfRange}))
+		return
+	}
+	// VALIDATED IF PRESENT, never required (fix-plan item 5). "Accept and ignore" must not mean
+	// "accept anything": an absent user_id is a module-2 caller doing nothing wrong, but a caller that
+	// SUPPLIED one and got a silent 200 would have no way to learn that the value was garbage — and the
+	// same body sent to module 3 would 400 with user_id:malformed. Silently accepting a typo here and
+	// rejecting it there is precisely the per-module surprise this item exists to remove. Same slug
+	// (issueMalformed) and same shape as run/report/M3-quote, so one client renders all four
+	// identically. The empty case is NOT reported: omitted and "" are indistinguishable on a
+	// non-pointer string, and treating "" as an error would make user_id de-facto required.
+	if req.UserID != "" && !uuidRe.MatchString(req.UserID) {
+		s.fail(w, r, newErr(codeValidationFailed, "user_id_malformed").
+			withDetails(fieldDetail{Field: "user_id", Issue: issueMalformed}))
 		return
 	}
 	ctx, cancel := dbCtx(r.Context())

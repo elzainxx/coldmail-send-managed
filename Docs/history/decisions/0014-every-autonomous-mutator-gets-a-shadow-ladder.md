@@ -221,12 +221,25 @@ seed.
   thirteen-file audit, a discovery mechanism, and a ladder that composes in the INVERSE direction to
   item 12's — times two repositories. Recorded here because the estimate being wrong is itself worth
   knowing next time.
+- **A hidden test-time ceiling surfaced in the sibling module and was fixed in BOTH harnesses.** In
+  `coldmail-send-byo`, `internal/dispatch` hit Go's DEFAULT 600s per-package timeout — which `go_suite`
+  had never overridden — and that harness reported `FAIL … 600.007s` with every test PASSED and no
+  `--- FAIL` line: a claimed bug that did not exist, arriving from the test infrastructure rather than
+  from the code. The cause was measured rather than assumed, and it was *not* the new tests: the package
+  needed 646s on an accumulated dev database and **113s on a clean slate** minutes later, a ~5.7x swing
+  from dev-DB state behind every per-test template clone. Wall-clock there is a function of environment
+  state, so an invisible fixed ceiling converts a dirty database or a loaded runner into a phantom
+  failure. `tests/harness/run.sh` here now passes an explicit `-timeout "$GO_SUITE_TIMEOUT"` (default
+  `40m`) and reports a breach as a distinct BUDGET failure instead of folding it into the test-failure
+  branch. Applied PRE-emptively: this module's suite is the same shape on the same kind of dev database.
 
 ## Links
 
 - CLAUDE.md Rule 1 (config-not-code), Rule 3 (real infra in tests), Rule 5 (additive-only — why
   `autopause_enabled` survives), Rule 7 (autonomous-subsystem safety controls — where all three dials
   are now listed).
+- `tests/harness/run.sh` — `GO_SUITE_TIMEOUT` and `go_suite`'s separate timeout branch (last
+  Consequence above).
 - ADR-0013 — the `dispatch_mode` ladder, whose boolean composes as a FLOOR. Read together: the two
   ADRs state one rule on inverse scales.
 - `Docs/config-reference.md` — "Fix-plan item 13 state" (both keys, the CEILING reasoning, the

@@ -80,6 +80,22 @@ hr; echo "SUITE 1+2: Go real-infra tests (migration lifecycle + DB isolation + P
 # post-test temp-.exe cleanup ("unlinkat ... being used by another process") makes `go test`
 # exit non-zero even when every test PASSES. That artifact does not occur on Linux CI. We run
 # the tests, strip the cleanup noise, and decide pass/fail from whether Go printed a FAIL line.
+#
+# GO_SUITE_TIMEOUT: every package here drives REAL Postgres, and several deliberately spend real
+# elapsed time (CLAUDE.md Rule 10 — a lease expiry test must actually wait). Go's DEFAULT test
+# timeout is 600s per package, and `go_suite` had never overridden it. The sibling module
+# (coldmail-send-byo) walked into it on 2026-08-05: its internal/dispatch was killed at exactly
+# 600.007s with EVERY test PASSED and not one `--- FAIL` line, and its harness reported
+# "FAIL: Phase 3 dispatch" for a suite in which nothing was wrong.
+#
+# The cause was measured, not assumed, and it is not test count: that package needed 646s on an
+# accumulated dev database and **113s on a clean slate** minutes later — a ~5.7x swing from
+# dev-DB state sitting behind every per-test template clone. Wall-clock here is a function of
+# environment state, so a fixed invisible 600s converts a dirty database or a loaded CI runner
+# into a phantom test failure. Made explicit here PRE-emptively: this module's suite is the same
+# shape on the same kind of dev database. Set per-run so CI and a laptop share one number.
+GO_SUITE_TIMEOUT="${GO_SUITE_TIMEOUT:-40m}"
+
 go_suite() { # $1=dir  $2=label
   local out
   # The trailing `|| true` is load-bearing under `set -euo pipefail`: on Windows `go test` can
@@ -90,9 +106,16 @@ go_suite() { # $1=dir  $2=label
   # deliberately judge pass/fail from the Go verdict LINE below, never the exit code — so
   # swallowing the substitution's exit status here is correct, not a masked failure. On Linux
   # CI the artifact does not occur, so `|| true` is a no-op there.
-  out="$( { cd "$1" && GOTOOLCHAIN=local go test -count=1 -v . 2>&1 | grep -vE "unlinkat|being used by another process"; } || true )"
+  out="$( { cd "$1" && GOTOOLCHAIN=local go test -count=1 -v -timeout "$GO_SUITE_TIMEOUT" . 2>&1 | grep -vE "unlinkat|being used by another process"; } || true )"
   echo "$out" | grep -E "^(ok|FAIL|--- (PASS|FAIL))" | tail -40
-  if echo "$out" | grep -qE "^--- FAIL|^FAIL\b"; then bad "$2"; else ok "$2"; fi
+  # A timeout is reported SEPARATELY from a test failure, because they call for opposite responses:
+  # a `--- FAIL` means fix the code, a timeout means the package outgrew its budget and no verdict
+  # was reached at all. Conflating them is what made the sibling module's 600s kill read as a
+  # dispatch bug when every one of its tests had passed.
+  if echo "$out" | grep -qE "^panic: test timed out"; then
+    echo "  NOTE: package exceeded GO_SUITE_TIMEOUT=$GO_SUITE_TIMEOUT — no verdict was reached; this is a BUDGET failure, not a test failure. Raise the budget or split the package."
+    bad "$2 (TIMED OUT after $GO_SUITE_TIMEOUT — no verdict)"
+  elif echo "$out" | grep -qE "^--- FAIL|^FAIL\b"; then bad "$2"; else ok "$2"; fi
 }
 go_suite tools/send-managed-migrate "migration lifecycle + contiguity guard (apply/idempotent/down/gap)"
 # The harness package now holds BOTH the isolation-mode tests AND the Phase 1 behavioral suite

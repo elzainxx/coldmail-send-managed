@@ -111,9 +111,19 @@ Consequences to be explicit about:
   but nor can a specific recipient's content be redacted on request ahead of expiry without a manual
   DELETE.
 - At-rest encryption for `send_logs` is registered in [`future-work.md`](./future-work.md), not built.
+- **The retention promise is not being kept on a freshly migrated deployment.** Since
+  `send_managed_0026` the sweep is gated by `retention_mode`, seeded **`shadow`** — at which it counts
+  the expired rows and logs the count, deleting nothing. So `debug_log_retention_days` describes an
+  intention, not an outcome, until an operator promotes `retention_mode` to `enforce`. Because
+  retention is the *sole* privacy control on this table, that promotion is not a tuning step: it is
+  the moment the privacy control starts existing. It is a REQUIRED go-live gate
+  ([`go-live-checklist.md`](./go-live-checklist.md) §12) precisely so it cannot be missed, and the
+  shadow count is what tells you how much content accumulated before you got there. The default is
+  `shadow` rather than `enforce` on purpose (ADR-0014): a sweep that deletes on first boot after an
+  upgrade is not something an operator can preview, and this table's deletions are irreversible.
 
-Mitigations available today: keep `debug_log_retention_days` short; rely on the database's own
-at-rest encryption; restrict who can read the database at all.
+Mitigations available today: promote `retention_mode` to `enforce`; keep `debug_log_retention_days`
+short; rely on the database's own at-rest encryption; restrict who can read the database at all.
 
 ### 3.3 "The platform cannot read credentials" depends on KMS/IAM separation being configured
 
@@ -330,7 +340,8 @@ The codebase cannot check these; they are the deployment's half of the posture.
 - [ ] `ADMIN_API_KEY_HASHES` and `PLATFORM_TOKEN_HASHES` are **different** credentials, each rotatable, each held by the smallest possible set.
 - [ ] `send_managed` schema owner is `send_managed_owner` (non-login, non-superuser) and `send_managed.accounts` shows `relforcerowsecurity = t`.
 - [ ] `debug_log_retention_days` reflects a deliberate privacy decision (§3.2), not a default nobody looked at.
-- [ ] `autoquarantine_mode` is understood: it defaults to **shadow** (logs what it would do, acts on nothing).
+- [ ] **`retention_mode` is `enforce`** (§3.2). Until it is, `debug_log_retention_days` is an intention and nothing is ever deleted — the sole privacy control on `send_logs` is not running. Verify the value, do not assume the default: `GET /v1/admin/config` and read it.
+- [ ] All three `off`/`shadow`/`enforce` dials are understood: `autoquarantine_mode`, `autopause_mode` and `retention_mode` all default to **shadow** — each logs the action it would take and takes none. Two of the three are safe to leave there; `retention_mode` is not (the row above).
 - [ ] The database's own at-rest encryption is enabled (the only control over `send_logs` content besides retention).
 - [ ] No account has a **private-range or link-local `smtp_host`** (§3.13) — certificate verification is skipped for those, so the credential would cross an unverified connection. `SELECT id, smtp_host FROM send_managed.accounts;` and eyeball it.
 - [ ] `alert_webhook_url` points where you think it does (§3.14) — the value is validated for scheme prefix only, and the Control will POST to a private or link-local address just as readily as to your alerting service.

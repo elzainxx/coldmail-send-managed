@@ -115,6 +115,20 @@ go_suite tests/harness "DB isolation + Phase 1 data model (claim/events/RLS/cryp
 # executes is worse than no test: it reports coverage it does not provide.
 go_suite services/control/internal/httpapi "root-mux coded 404 + log-forgery neutralization (item 7b) + readyz uniform checks{} envelope (item 10)"
 
+# --- Two packages that were WRITTEN AND PASSING BUT RUN BY NOTHING (found 2026-08-05) ----------
+# Exactly the failure the paragraph above records, still live two packages later. A cross-repo
+# audit of every *_test.go directory against this script's go_suite list found these two here (and
+# four in module 3): 3 tests, 0 skips, all passing, executed by nothing. Neither this script nor CI
+# would ever have said so — CI runs gofmt + `go vet ./...` + this script, and `go vet` type-checks
+# test files WITHOUT running them, so an unwired package is indistinguishable from a wired one in
+# every signal we had. Both need no database and no stack (verified with every TEST_* variable
+# unset), so they belong here rather than after a template build.
+#
+# Standing rule from this finding: a test that EXISTS is not a test that RUNS. When adding either a
+# test package or a CI gate, verify the wiring — ideally by breaking it once and watching red.
+go_suite services/control/internal/workerlink  "workerlink stream in-flight accounting (2 tests)"
+go_suite services/control/internal/workerproto "variation wire-format round-trip (1 test)"
+
 # --- Phase 2 admin API behavioral suite (real Server over httptest against real PG clones) -----
 # These tests live in the control module (internal/adminapi) and drive the ACTUAL admin handlers
 # against clones of a template migrated 0000..0014. Build a dedicated template so the clones have

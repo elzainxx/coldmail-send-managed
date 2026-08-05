@@ -177,6 +177,21 @@ func newDispatchEnv(t *testing.T, suffix string) *dispatchEnv {
 	// every existing Phase-5-era test keeps exercising the real mechanism unchanged; the DEDICATED
 	// Phase 9.5 shadow-mode tests (shadowmode_test.go) explicitly set "shadow"/"off" themselves.
 	env.setConfigStr(t, "autoquarantine_mode", "enforce")
+
+	// fix-plan item 13 (send_managed_0026): autopause_mode and retention_mode are seeded "shadow" for the
+	// same launch-safety reason autoquarantine_mode is, and the same argument applies to the pre-existing
+	// suites — policy_test (T_ThrottlePauses), shadowmode_test's autopause_enabled kill-switch control,
+	// and the whole Phase 7 retention suite all assert the real ENFORCING mechanics that predate the
+	// ladder. Under the seeded shadow default they would observe a logged decision instead of the flag,
+	// and a sweep that counts instead of deletes — not what they test.
+	//
+	// This override CANNOT be allowed to hide the seeded default itself, which is item 13's actual safety
+	// claim. Two mechanisms sit outside its reach: TestMutatorMode_MigrationSeedsShadowNotEnforce asserts
+	// default_value (which Rule 1 forbids any test from mutating, so this function cannot touch it), and
+	// tools/send-managed-migrate/runner_integration_test.go asserts the seeded `value` against the raw
+	// migration chain with no harness in the picture at all.
+	env.setConfigStr(t, "autopause_mode", "enforce")
+	env.setConfigStr(t, "retention_mode", "enforce")
 	return env
 }
 

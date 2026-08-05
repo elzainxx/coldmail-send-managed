@@ -525,6 +525,115 @@ how you calibrate `quarantine_threshold` *before* handing the decision real auth
 
 ---
 
+## The three shadow dials (auto-quarantine, auto-pause, retention)
+
+`autoquarantine_mode` is not alone. Since `send_managed_0026` **every** autonomous mutator — every
+write the Control makes on its own initiative, as opposed to transcribing a worker's report or
+executing your request — sits on the same three-value ladder, and all three are seeded `shadow`:
+
+| dial | `off` | `shadow` (seeded) | `enforce` |
+|---|---|---|---|
+| `autoquarantine_mode` | no decision | decides, writes an `account_events` marker, does not quarantine | quarantines |
+| `autopause_mode` | no decision | decides, writes an `account_events` marker, does not pause | pauses on a throttle outcome |
+| `retention_mode` | no sweep at all | counts expired `send_logs` and logs the count, deletes nothing | deletes expired `send_logs` |
+
+Two things about this list are load-bearing:
+
+- **`shadow` OBSERVES, it does not merely abstain.** A dial that reported nothing would be
+  indistinguishable from `off`, and you would read the silence as "nothing is tripping the threshold"
+  and promote a control you had never actually watched. So each `shadow` mode leaves a trail — see
+  "Reading the shadow markers" below.
+- **A dial gates an ACTION, never its REVERSAL.** Auto-**unpause** runs at every value of
+  `autopause_mode`, including `off`. Gating a reversal would leave real pauses in place forever, which
+  is worse than the enforcing behaviour the dial exists to make safe.
+
+> ⚠ **`retention_mode` is the one you cannot leave alone.** At `shadow`, `send_managed.send_logs` —
+> recipient, subject, body, headers, SMTP response — **grows without bound**, and the retention promise
+> in [`security-posture.md`](./security-posture.md) is not being kept while it does. Promoting it is a
+> REQUIRED go-live step (`go-live-checklist.md` §12), not a nicety. The other two dials are genuinely
+> deferrable; this one is a standing privacy cost that grows every day it stays.
+
+### Reading the current values
+
+The new dials are **not** in the health snapshot — `ahealth | jq .shadow` reports
+`autoquarantine_mode` only. Read the other two from the config table:
+
+```sql
+SELECT key, value->>'v' AS current, default_value->>'v' AS seeded
+FROM send_managed.config
+WHERE key IN ('autoquarantine_mode','autopause_mode','retention_mode','autopause_enabled','dispatch_enabled')
+ORDER BY key;
+```
+
+`autopause_enabled` still exists and is still honored, composed as a **CEILING**: `false` caps the
+effective mode at `off` regardless of `autopause_mode`. It can only ever make the system do *less* —
+`autopause_enabled=true` does **not** promote a dial you left in `shadow`. (This is the same rule
+`dispatch_enabled` follows as a severity FLOOR on the `dispatch_mode` ladder; the two read as
+opposites only because one ladder orders by activity and the other by severity. ADR-0014.)
+
+### Reading the shadow markers
+
+**Auto-pause at `shadow`** writes a `send_managed.account_events` row per decision, with the same
+schema-neutral encoding the quarantine marker uses — `actor='system'`, `action='updated'`, and
+`from_flags = to_flags`, the equality itself being the proof that nothing was mutated:
+
+```sql
+SELECT created_at, account_id, reason
+FROM send_managed.account_events
+WHERE reason LIKE 'shadow_would_pause:%'
+ORDER BY created_at DESC LIMIT 20;
+```
+
+Count them over a window and you have the number `enforce` would have paused. It is a **separate** row
+from the quarantine marker on purpose: one outcome can trip neither, either, or both, and collapsing
+them would make "which mutator wanted to act" unrecoverable from the audit trail — the one question an
+observation period is trying to answer.
+
+**Retention at `shadow`** logs on every sweep tick:
+
+```
+retention: retention_shadow_would_delete — retention_mode="shadow", so NOTHING was deleted this
+tick; 41823 expired send_logs row(s) would be dropped at retention_mode=enforce. send_logs GROWS
+WITHOUT BOUND until this dial is promoted (fix-plan item 13, go-live-checklist.md)
+```
+
+That count is deliberately **not** capped by `retention_delete_batch_size` — batch size is a rate
+control for the write, and reporting "1000" every tick because that is the batch would be a useless
+number to size a retention window against. So the number you see is the real backlog.
+
+### Promoting a dial
+
+```bash
+curl -sS -X PUT "$BASE/v1/admin/config/retention_mode" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"value":{"v":"enforce"}}'
+```
+
+No redeploy and no restart: every dial is re-read from the config table on each tick, so promotion
+takes effect on the next one. Verify it took by watching the log — the `retention_shadow_would_delete`
+line should stop and `retention: swept N expired send_logs` should start, and for the account dials
+the `shadow_would_pause:` rows should stop appearing while real `(pause, throttle)` events start.
+
+A typo is rejected at the `PUT` boundary rather than silently accepted, so you find out immediately.
+If one somehow reaches the table anyway, the Control resolves it to **`shadow`** and logs at
+`level=error` — never to `enforce` (a typo must not gain the power to `DELETE`) and never to `off` (a
+typo must not silently disable a control you believe is running).
+
+### Demoting a dial mid-incident
+
+Demoting is safe and is the right move if a dial is misbehaving:
+
+- `retention_mode=shadow` stops deletion immediately; nothing already deleted comes back, but the
+  bleeding stops and you keep the visibility.
+- `autopause_mode=shadow` (or `off`) stops new pauses. Pauses already applied still expire normally via
+  auto-unpause, which is not gated.
+
+What demotion does **not** undo: `send_logs` rows already dropped are gone, and job outcomes
+(`job_events`, final job states) were never touched by the sweep at any mode — that is asserted
+against the sweep function's own source, not just observed on test fixtures.
+
+---
+
 ## Pool exhausted / waiting for capacity
 
 ### `waiting_for_capacity` is not an error
@@ -796,6 +905,7 @@ DMARC aggregate reports, and postmaster tools. Bounce/complaint ingestion is reg
 | **Content variation** | `variation_enabled` plus the per-feature `variation_*` keys | Reduces byte-identical repetition across messages (HTML minification, comment injection, CSS micro-variation, encoding/boundary rotation, preheaders, header style). All default to off/neutral, so the whole set at defaults is byte-identical to no variation at all. |
 | **SendManaged identity hygiene** | Per-account `from_address` / `from_name` | Must match what the provider has verified. A mismatch is a rejection or a spam signal, not a subtle effect. |
 | **Auto-quarantine** | `autoquarantine_mode`, `quarantine_threshold` | Pulls failing accounts out of rotation before they do more damage. In `shadow` (the default) it only *reports* — promote to `enforce` when you trust the threshold. |
+| **Auto-pause on throttling** | `autopause_mode`, `throttle_pause_seconds` (`autopause_enabled` as a CEILING) | Backs an account off when the provider says "slow down". In `shadow` (the default) it only *reports*. Self-reversing once promoted: auto-unpause clears it after `throttle_pause_seconds`, at every value of the dial. |
 
 > **`one_by_one` is not "drain one account, then the next."** The name suggests it, and the earlier
 > wording of the rotation row above said so outright, but that is not what it does. The order is
@@ -830,6 +940,11 @@ One retention note, because it surprises people mid-incident: `send_logs` holds 
 content of each attempt and is **dropped** after `debug_log_retention_days`. Job *outcomes*
 (`job_events` and final job states) are kept permanently. So a post-mortem more than a few days old
 can tell you *what happened* but not *what was sent*.
+
+**Unless `retention_mode` is still `shadow`, in which case nothing is being dropped at all** and the
+post-mortem window is unbounded — which is a privacy liability, not a feature. Check which state you
+are in before you rely on either behaviour:
+[The three shadow dials](#the-three-shadow-dials-auto-quarantine-auto-pause-retention).
 
 ---
 
@@ -879,7 +994,7 @@ The signature of a healthy system: `dispatch_paused` false, `sends_last_window` 
 | `accounts.disabled` | Whatever you set | Unexpectedly non-zero → someone disabled an account; check `account_events`. |
 | `pools[].eligible_accounts` / `headroom` | `> 0` / `"ok"` | `0` / `"exhausted"` → that pool cannot serve. Harmless on a pool with nothing routed to it. |
 | `errors_last_window` | Small, spread across classes | Any class spiking. The six classes always appear, `0` included, so the shape is stable — a class at 0 is genuine, not missing data. Counts **failures, not rows**: one failing send contributes exactly 1 even if it is retried and later succeeds, so this is a usable incident size. |
-| `shadow.autoquarantine_mode` | `shadow` before go-live, `enforce` after you have calibrated | `off` means auto-quarantine is fully disabled — deliberate, but know that it is. |
+| `shadow.autoquarantine_mode` | `shadow` before go-live, `enforce` after you have calibrated | `off` means auto-quarantine is fully disabled — deliberate, but know that it is. **This field covers auto-quarantine only** — `autopause_mode` and `retention_mode` are on the same ladder but are NOT in this snapshot; read them from the config table ([the three shadow dials](#the-three-shadow-dials-auto-quarantine-auto-pause-retention)). Surfacing all three here is registered in `future-work.md`. |
 | `shadow.would_quarantine_count` / `recent[]` | Low | High in `shadow` mode → what `enforce` *would* be doing. This is your calibration data for `quarantine_threshold`. |
 | `active_conditions[]` | `[]` | Non-empty → [Alert conditions](#alert-conditions--triage). |
 

@@ -1,15 +1,22 @@
 # Config reference (living mirror of Phase 9 §4)
 
-Authoritative source: **Phase 9 §4** (`history/phase-9-polish-and-documentation.md`) — the
+Authoritative source: **Phase 9 §4** (`history/phase-9-polish-and-documentation.md`) — originally a
 53-key consolidated reference (amended from 50, `Docs/history/open-decisions.md` P8-OD-1: Phase 8
 grew from 14 to 17 keys post-Chunk-5). This file is the checked-in mirror, verified by the
 CI `config_drift` gate against the live `send_managed.config` seeds.
+
+**Current total: 57 keys** — 14 (`0010`) + 3 (`0017`) + 2 (`0018`) + 6 (`0019`) + 17 (`0020`) +
+12 (`0021`+`0023`) + 1 (`0025`, fix-plan item 12) + 2 (`0026`, fix-plan item 13). This number is a
+convenience for the reader, not the gate: `config_drift` diffs the live key set against
+`config-manifest.txt` and against this file's tables, so a stale count here is a doc bug while a stale
+key is a build failure.
 
 ## Phase 1 state (14 keys, `send_managed_0010`)
 
 `send_managed.config` is created in Phase 1 (`send_managed_0010`), seeding the **14 foundation keys** below
 (Phase 9 §4.1). Later phases append their keys (Phase 5 `send_managed_0017`, Phase 6 `send_managed_0018`,
-Phase 7 `send_managed_0019`, Phase 8 `send_managed_0020`, Phase 9.5 `send_managed_0021`) growing to the 53-key
+Phase 7 `send_managed_0019`, Phase 8 `send_managed_0020`, Phase 9.5 `send_managed_0021`, then the fix-plan
+alignment keys `send_managed_0025`/`send_managed_0026`) growing to the current 57-key
 total. The drift gate diffs the **phase-aware manifest** (`config-manifest.txt`) against the
 live `send_managed.config` key set AND this table — all three must match, which is what makes "no
 hardcoded tuning constant" structurally checkable. `default_value` is never mutated.
@@ -165,6 +172,70 @@ rung; `dispatch.dispatch_paused` is retained unchanged in meaning ("the effectiv
 `dispatch_paused` does the same. Before this key, a Control halted by anything other than that one
 boolean reported `dispatch_paused: false` to every polling UI — work visibly not moving with the
 dashboard insisting nothing was wrong.
+
+## Fix-plan item 13 state (+2 keys, `send_managed_0026`) — a shadow ladder for every autonomous mutator
+
+An **autonomous mutator** is a write nobody asked for: state the Control changes on its own
+initiative, as opposed to transcribing a worker's report or executing an operator's request. Module 1
+(`coldmail-verify`) has had the same property from the start — all four of its mutators default to
+`recommend_only`, computing the decision and recording the recommendation while mutating nothing. This
+module had it for exactly one writer (`autoquarantine_mode`, `send_managed_0021`); `send_managed_0026`
+generalizes it to the two that were left.
+
+Every dial on this ladder takes the same three values, in increasing **activity**. (Written as a list,
+not a table, on purpose: `config_drift` extracts documented key names from the FIRST CELL of every
+table row matching `` | `lowercase_identifier` | ``, so a values table here would register `off`,
+`shadow` and `enforce` as three seeded config keys and fail the gate. Found by running it.)
+
+- **`off`** — the decision is not evaluated at all. No write, no observation row, no log line.
+- **`shadow`** — the decision IS evaluated and RECORDED; the write is NOT performed. **The seeded default.**
+- **`enforce`** — the decision is evaluated and the write is performed: the pre-`0026` behaviour.
+
+An unrecognized value falls back to **`shadow`** at `level=error` — never `enforce` (a typo must not
+silently gain the power to act, least of all the power to DELETE) and never `off` (a silently disabled
+control an operator believes is running is module 1's audit finding D2 reproduced here). The admin
+`PUT` boundary rejects anything off-list as well, so a typo is reported to the operator instead of
+quietly demoting a control they thought they had promoted.
+
+> **⚠ THIS CHANGES DEFAULT BEHAVIOUR ON UPGRADE.** Both keys are seeded `shadow`, so a deployment that
+> runs `send_managed_0026` **stops auto-pausing accounts** and **stops deleting expired `send_logs`**
+> until an operator promotes each dial. Promoting `retention_mode` to `enforce` is a **REQUIRED**
+> go-live step (`Docs/go-live-checklist.md`), not a nicety: left at `shadow`, `send_logs` — which holds
+> recipient, subject and body — **grows without bound** and the retention promise in
+> `Docs/data-retention.md` is not being kept. The sweep logs
+> `retention_shadow_would_delete` with the pending row count on every tick, so the cost of leaving it
+> is visible rather than silent.
+
+| key | default_value | value_type | seeding migration | description |
+|-----|---------------|-----------|-------------------|-------------|
+| `autopause_mode` | `{"v":"shadow"}` | string | send_managed_0026 | Auto-pause (throttle) shadow ladder: `off\|shadow\|enforce`. `enforce` is the Phase 5 behaviour — a throttle outcome sets `accounts.paused` with `pause_reason='throttle'`. `shadow` **decides and records but does not pause**: it writes a `send_managed.account_events` observation row (`actor='system'`, `action='updated'`, `from_flags == to_flags`, `reason` starting `shadow_would_pause:`) and the account keeps sending through the throttle. `off` evaluates nothing. **Auto-UNPAUSE is never gated by this dial at any value** — the reversal keeps working, because blocking a reversal would leave real pauses in place forever, manufacturing the stuck-account incident an observation period exists to avoid. Composes with `autopause_enabled` as a **CEILING** (see below). Consumed by `internal/dispatch/account_effect.go` via `Config.AutopauseDecides()` / `Config.AutopauseWrites()`. |
+| `retention_mode` | `{"v":"shadow"}` | string | send_managed_0026 | Debug-log retention sweep ladder: `off\|shadow\|enforce`. `enforce` is the Phase 7 behaviour — the batched `DELETE` of `send_logs` rows past `ttl_expires_at`. `shadow` **counts and logs what it would drop and deletes nothing**, emitting `retention_shadow_would_delete` with the pending count each tick. `off` neither counts nor deletes. The shadow count is deliberately **not** bounded by `retention_delete_batch_size` (that is a rate control for the write; reporting "1000" every tick because that is the batch would be a useless number to size a retention window against), and it is a `count(*)` rather than a rolled-back `DELETE` — a rollback would take real row locks, generate real WAL and bloat the table on every tick for an observation. **The sweep still touches `send_managed.send_logs` ONLY at every value**: job outcomes (`job_events` + final `jobs` states) are permanent by construction (§3.2), which is asserted against the source of the sweep, not just its behaviour. No boolean composes with it — `retention_sweep_interval_ms` and `retention_delete_batch_size` are rate controls, not enables. Consumed by `internal/dispatch/retention.go` via `Config.RetentionCounts()` / `Config.RetentionDeletes()`. |
+
+**`autopause_enabled` is NOT replaced and NOT dropped**, for the same reason `dispatch_enabled`
+survived `send_managed_0025`: it has live consumers and named runbook steps. It composes as a severity
+**CEILING** — `autopause_enabled=false` caps the effective mode at `off`, so an operator who disabled
+auto-pause never receives one regardless of what `autopause_mode` says. It never *raises* a mode:
+`enabled=true` with `mode=shadow` is shadow, not enforce; a boolean cannot promote a dial an operator
+left in observation.
+
+**Why a CEILING here when `dispatch_enabled` is a FLOOR.** Both are the same rule stated on inverse
+scales: *the boolean can only ever reduce what the system does, never increase it.* On the `dispatch_mode`
+ladder "does less" means a **more** severe rung, so the boolean is a floor. On this ladder "does less"
+means a **less** active mode, so the boolean is a ceiling. Because the two ladders run in opposite
+directions, they are deliberately **separate machinery** — separate file (`internal/dispatch/mutator_mode.go`
+vs `rung.go`), separate ordering table, separate names. Sharing one severity map would put `stopped` and
+`enforce` at the same end of the scale, which is exactly backwards. `ADR-0014` records the decision.
+
+**Which mutators are on the ladder, and which are deliberately not.** The audit behind this key is not
+prose: `TestMutatorMode_EveryAutonomousMutatorIsDialledOrExplicitlyExcluded` **discovers** every file in
+`internal/dispatch` that writes to `send_managed.*` and requires each to be either enumerated as dialled
+(with its dial actually referenced in that file) or enumerated as excluded with a recorded reason. A new
+autonomous mutator therefore cannot ship enforcing on day one — its file appears in neither map and the
+test goes red naming it. Currently dialled: auto-quarantine (`autoquarantine_mode`), auto-pause
+(`autopause_mode`), the retention sweep (`retention_mode`). Deliberately excluded, with reasons in that
+test's `autonomousWriteExclusions` map: the score recompute (derived state, not an action), auto-unpause
+(a reversal), the claim/lease/push/reclaim/rescan/exhaustion paths (already dialled by `dispatch_mode`),
+and outcome ingestion (transcribing an external event, never autonomous).
 
 ## Both config-ordering invariants (enforced at BOTH the admin PUT boundary AND config-LOAD; CLAUDE.md Rule 1, Phase 7 §5.3 authoritative)
 

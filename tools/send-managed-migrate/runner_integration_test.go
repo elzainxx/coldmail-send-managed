@@ -99,7 +99,7 @@ func TestRunnerLifecycle(t *testing.T) {
 	// the migration chain — it grows as later phases add 0015+.
 	wantChain := []string{"0000", "0001", "0002", "0003", "0004", "0005", "0006", "0007",
 		"0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019",
-		"0020", "0021", "0022", "0023", "0024", "0025"}
+		"0020", "0021", "0022", "0023", "0024", "0025", "0026"}
 
 	// --- Apply ---
 	if err := r.Up(ctx); err != nil {
@@ -135,10 +135,12 @@ func TestRunnerLifecycle(t *testing.T) {
 	// ladder; the first key added outside a numbered phase, and notably NOT paired with a drop of
 	// dispatch_enabled: ADR-0013 records why the boolean is composed as a severity FLOOR instead of
 	// removed, since it has many live consumers) = 55.
-	// Phase 4 added NO config key (§0); Phase 7, Phase 9.5, send_managed_0023 and send_managed_0025 are
-	// fully schema-neutral (config seeds only, no table).
-	if n := configKeyCount(t, admin); n != 55 {
-		t.Fatalf("after Up: send_managed.config has %d keys, want 55 (14 foundation + 3 Phase 5 + 2 Phase 6 + 6 Phase 7 + 17 Phase 8 + 11 Phase 9.5 + 1 send_managed_0023 + 1 send_managed_0025)", n)
+	// PLUS TWO at send_managed_0026 (autopause_mode, retention_mode, fix-plan item 13 — the same
+	// off|shadow|enforce ladder extended to the two remaining undialled autonomous mutators; ADR-0014) = 57.
+	// Phase 4 added NO config key (§0); Phase 7, Phase 9.5, send_managed_0023, send_managed_0025 and
+	// send_managed_0026 are fully schema-neutral (config seeds only, no table).
+	if n := configKeyCount(t, admin); n != 57 {
+		t.Fatalf("after Up: send_managed.config has %d keys, want 57 (14 foundation + 3 Phase 5 + 2 Phase 6 + 6 Phase 7 + 17 Phase 8 + 11 Phase 9.5 + 1 send_managed_0023 + 1 send_managed_0025 + 2 send_managed_0026)", n)
 	}
 	// Phase 8 Chunk 5's seventeen content-variation config seeds — anti-vacuity that they landed
 	// (amended from fourteen, P8-OD-1 RULED-WIDEN: css_magnitude_px/zero_width_rate/user_agent_rate).
@@ -245,6 +247,50 @@ func TestRunnerLifecycle(t *testing.T) {
 	if !configKeyExists(t, admin, "dispatch_enabled") {
 		t.Fatal("after Up: send_managed.config has lost dispatch_enabled — 0025 adds the rung ladder and must RETAIN the boolean (Rule 5; ADR-0013: it is composed as a floor, not replaced, because it has live consumers)")
 	}
+	// send_managed_0026's two seeds (fix-plan item 13, ADR-0014: the off|shadow|enforce ladder extended to
+	// the last two undialled autonomous mutators). This assertion is the one place in the tree where the
+	// seeded SAFETY DEFAULT is checked with no test harness in the picture, and that is why it is load-
+	// bearing rather than decorative: the behavioral harness (newDispatchEnv) pins both dials to "enforce"
+	// so the Phase-5-era and Phase-7 suites keep asserting real enforcing mechanics, which means a
+	// migration that seeded "enforce" instead of "shadow" would be INVISIBLE to every test in
+	// internal/dispatch except the one that reads default_value. Here `value` is read against the raw
+	// chain, so both halves of the safety claim are pinned by something the harness cannot reach.
+	//
+	// Seeding "enforce" is the failure that matters, and it is silent in the worst possible direction:
+	// retention_mode=enforce on a fresh migration means the sweep starts DELETING send_logs on its first
+	// tick, with no observation period, in a deployment whose operator has not yet been told the dial
+	// exists. Seeding "off" is the other silent failure — a control an operator believes is running while
+	// nothing is evaluated at all. Both must fail here.
+	for _, key := range []string{"autopause_mode", "retention_mode"} {
+		if !configKeyExists(t, admin, key) {
+			t.Fatalf("after Up: send_managed.config missing %q (send_managed_0026 seed not applied)", key)
+		}
+		if val, def := configValueAndDefault(t, admin, key); val != `{"v": "shadow"}` || def != `{"v": "shadow"}` {
+			t.Fatalf("after Up: %s value=%s default_value=%s, want both {\"v\": \"shadow\"} — a mutator that starts ENFORCING on a fresh migration has no observation period, and for retention_mode that means deleting send_logs on the first tick (ADR-0014)", key, val, def)
+		}
+		// value_type is not cosmetic: the admin PUT validator dispatches on it, so a row typed anything
+		// other than "string" would take the wrong validation path and could accept a value the ladder
+		// cannot read — which then resolves to shadow forever while the operator believes they promoted it.
+		if vt := configValueType(t, admin, key); vt != "string" {
+			t.Fatalf("after Up: %s value_type=%q, want \"string\" (the admin config validator dispatches on value_type; a mistyped row validates down the wrong path)", key, vt)
+		}
+	}
+	// ...and the companion, exactly as with 0025/dispatch_enabled: 0026 must RETAIN autopause_enabled.
+	// It is composed as a severity CEILING of autopause_mode (false caps the effective mode at "off"),
+	// which is what the boolean already meant, and it has live consumers (the health snapshot, named
+	// runbook steps). An over-tidy migration that dropped the "superseded-looking" boolean would break
+	// Rule 5 and silence every runbook step that names it.
+	if !configKeyExists(t, admin, "autopause_enabled") {
+		t.Fatal("after Up: send_managed.config has lost autopause_enabled — 0026 adds the mode ladder and must RETAIN the boolean (Rule 5; ADR-0014: it is composed as a CEILING, not replaced)")
+	}
+	// The two retention RATE controls are a different axis from the new MODE dial and 0026 must not touch
+	// them. Folding rate into mode would silently change sweep throughput on upgrade for anyone who had
+	// tuned them, on top of the mode change that upgrade already makes.
+	for _, key := range []string{"retention_sweep_interval_ms", "retention_delete_batch_size"} {
+		if !configKeyExists(t, admin, key) {
+			t.Fatalf("after Up: send_managed.config has lost %q — 0026 adds retention_mode and must leave Phase 7's retention RATE controls alone (they are a separate axis from the mode dial)", key)
+		}
+	}
 	// FORCE RLS is set on the crown-jewel credential table.
 	if !accountsForceRLS(t, admin) {
 		t.Fatal("after Up: send_managed.accounts does not have FORCE ROW LEVEL SECURITY")
@@ -318,6 +364,37 @@ func TestRunnerLifecycle(t *testing.T) {
 			}
 			if !configKeyExists(t, admin, "dispatch_enabled") {
 				t.Fatal("after Down 0025: dispatch_enabled is GONE — 0025's down must remove exactly its own row; sweeping up the retained boolean leaves a reverted system with no dispatch kill-switch at all")
+			}
+		}
+		// 0026's down, same shape and the same two halves. Note the DIRECTION this revert moves safety in,
+		// because it is the unusual one and ADR-0014 records it deliberately: deleting autopause_mode
+		// RESTORES enforcing auto-pause (with autopause_enabled alone governing again, which is exactly the
+		// pre-0026 behaviour), and deleting retention_mode restores enforcing deletion. A revert here is the
+		// LESS safe direction, not the more safe one — which is precisely why the down must delete its rows
+		// and nothing else, and must be run together with a source revert. Run standalone against unreverted
+		// source it leaves a Control that will not boot at all, since LoadConfig treats an absent row as a
+		// hard failure rather than a default; that is the intended loud failure, not a defect.
+		if v == "0026" {
+			for _, key := range []string{"autopause_mode", "retention_mode"} {
+				if configKeyExists(t, admin, key) {
+					t.Fatalf("after Down 0026: send_managed.config still has %q (down did not delete its seeded row)", key)
+				}
+			}
+			// The over-delete half. autopause_enabled and the two retention rate keys are what an
+			// over-broad down file would sweep up ("remove the pause/retention knobs this migration
+			// introduced") — none of the three is 0026's to delete, and losing autopause_enabled on a
+			// revert leaves a reverted system with no auto-pause switch at all.
+			for _, key := range []string{"autopause_enabled", "retention_sweep_interval_ms", "retention_delete_batch_size"} {
+				if !configKeyExists(t, admin, key) {
+					t.Fatalf("after Down 0026: %q is GONE — 0026's down must remove exactly its own two rows; sweeping up a retained boolean or a Phase 7 rate control breaks a reverted system", key)
+				}
+			}
+			// And autoquarantine_mode, which is on the SAME ladder but predates 0026 (send_managed_0021).
+			// A down written by pattern-matching on "the mode dials" rather than on this migration's own
+			// INSERTs would take it, silently removing the one autonomous-mutator control that shipped in
+			// Phase 9.5 — and it would look correct, because the row it deleted has the same shape.
+			if !configKeyExists(t, admin, "autoquarantine_mode") {
+				t.Fatal("after Down 0026: autoquarantine_mode is GONE — it is on the same ladder but belongs to send_managed_0021; 0026's down must delete its own two rows and no other mode dial")
 			}
 		}
 	}
@@ -406,6 +483,19 @@ func configValueAndDefault(t *testing.T, c *pgx.Conn, key string) (string, strin
 		t.Fatalf("config value lookup %q: %v", key, err)
 	}
 	return value, def
+}
+
+// configValueType returns a config row's value_type. The admin PUT validator dispatches on this
+// column, so a seed with the wrong value_type validates incoming writes down the wrong path even
+// though its value and default_value read correctly.
+func configValueType(t *testing.T, c *pgx.Conn, key string) string {
+	t.Helper()
+	var vt string
+	if err := c.QueryRow(context.Background(),
+		`SELECT value_type FROM send_managed.config WHERE key=$1`, key).Scan(&vt); err != nil {
+		t.Fatalf("config value_type lookup %q: %v", key, err)
+	}
+	return vt
 }
 
 // indexExists reports whether an index of the given name exists in the send_managed schema.

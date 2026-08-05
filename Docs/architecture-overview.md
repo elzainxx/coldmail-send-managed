@@ -83,7 +83,7 @@ The job state machine (`queued → assigned → sending → sent`, plus `sending
 | Credential never crosses a client boundary | two-vocabulary error rule; `no_secret_leak` CI gate (worker token) + the send-path harness's SMTP-credential canary scan | `internal/adminapi`, CI |
 | Tenant isolation | `user_id` on every table; RLS on all `send_managed.*`; `FORCE ROW LEVEL SECURITY` on `accounts` under the non-login `send_managed_owner` | DB |
 | No deadlock on account/job writes | account → job lock ordering, codebase-wide | CLAUDE.md Rule 9 + ADR-0010 |
-| Every tunable is config, not code | 55 seeded `send_managed.config` keys; `config_drift` + `config_consumption` CI gates | DB + CI |
+| Every tunable is config, not code | 57 seeded `send_managed.config` keys; `config_drift` + `config_consumption` CI gates | DB + CI |
 
 ## Control plane
 
@@ -96,7 +96,14 @@ reported as `dispatch.dispatch_rung` on `/v1/admin/health`),
 `dispatch_enabled` (the original boolean panic switch — RETAINED and still honored, composed as a
 severity FLOOR of `accept_and_defer` rather than as an independent lever, which is exactly what it
 already did),
-`autoquarantine_mode` (`off`/`shadow`/`enforce`, seeded **shadow**), `autopause_enabled`,
+`autoquarantine_mode`, `autopause_mode` and `retention_mode` (all three `off`/`shadow`/`enforce`, all
+three seeded **shadow** — every autonomous mutator is observable before it is allowed to act, which is
+the property module 1 has had from the start and `send_managed_0026` finished here. **Consequence worth
+knowing before an upgrade:** a freshly migrated deployment neither auto-pauses nor deletes expired
+`send_logs` until an operator promotes each dial, so `retention_mode=enforce` is a REQUIRED go-live step —
+left at `shadow`, `send_logs` grows without bound),
+`autopause_enabled` (RETAINED, composed as a CEILING of `autopause_mode` — the same "a boolean can only
+reduce what the system does" rule `dispatch_enabled` follows as a FLOOR, stated on the inverse scale),
 `variation_enabled`, and `alert_webhook_url` (empty = alerting off). Their exact semantics and
 defaults are in `config-reference.md`; when and how to flip them is `operator-runbook.md`.
 

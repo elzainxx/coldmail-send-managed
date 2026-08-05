@@ -85,6 +85,40 @@ func (d *Dispatcher) sweepExpiredSendLogs(ctx context.Context, cfg Config) (dele
 		log.Printf("retention: retention_delete_batch_size is %d — skipping sweep (a zero batch must never become an unbounded DELETE)", batch)
 		return 0, 0, nil
 	}
+
+	// fix-plan item 13 / send_managed_0026: the shadow ladder. Read ONLY through the Effective* methods
+	// (mutator_mode.go), which normalize an unrecognized value to shadow rather than letting a typo
+	// acquire the power to delete.
+	//
+	//   off      no sweep, no count, no log line.
+	//   shadow   COUNT what would be deleted and log it; delete nothing. THE SEEDED DEFAULT, so on a
+	//            fresh or freshly-migrated deployment nothing is ever dropped until an operator promotes
+	//            the dial — which is why that promotion is a REQUIRED go-live step and not a nicety.
+	//   enforce  the pre-0026 behaviour: the batched DELETE below.
+	//
+	// The shadow branch measures with a COUNT over the same predicate and the same index rather than by
+	// running the DELETE in a rolled-back transaction. A rollback would take real row locks, generate
+	// real WAL, and bloat the table on every tick for an observation — paying the full cost of the write
+	// to then throw it away. The count answers the operator's actual question ("how much would this
+	// drop?") at a fraction of it. It is deliberately UNBOUNDED by batch size: batch size is a rate
+	// control for the write, and reporting "1000" every tick because that is the batch would be a
+	// meaningless number to size a retention window against.
+	if !cfg.RetentionCounts() {
+		return 0, 0, nil
+	}
+	if !cfg.RetentionDeletes() {
+		ctx, cancel := context.WithTimeout(ctx, sweepTickTimeout)
+		defer cancel()
+		var would int
+		if err := d.db.QueryRow(ctx,
+			`SELECT count(*) FROM send_managed.send_logs WHERE ttl_expires_at < NOW()`).Scan(&would); err != nil {
+			return 0, 0, err
+		}
+		log.Printf("retention: retention_shadow_would_delete — retention_mode=%q, so NOTHING was deleted this tick; %d expired send_logs row(s) would be dropped at retention_mode=enforce. send_logs GROWS WITHOUT BOUND until this dial is promoted (fix-plan item 13, go-live-checklist.md)",
+			cfg.EffectiveRetentionMode(), would)
+		return 0, 0, nil
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, sweepTickTimeout)
 	defer cancel()
 

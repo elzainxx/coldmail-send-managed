@@ -198,6 +198,25 @@ func validateConfigValue(key, valueType string, value json.RawMessage) *apiError
 		if perr := validateEnumString(key, value, "off", "shadow", "enforce"); perr != nil {
 			return perr
 		}
+	case "autopause_mode", "retention_mode":
+		// Fix-plan item 13 (send_managed_0026): the same three-way shadow ladder, generalized to the two
+		// remaining autonomous mutators. Grouped with autoquarantine_mode's value set rather than given
+		// their own cases because they ARE the same ladder — three modes, same names, same ordering,
+		// same fail-safe target — and splitting them into per-key cases with identical bodies is how the
+		// three drift apart one edit at a time.
+		//
+		// The Control side (dispatch/mutator_mode.go's normalizeMutatorMode) ALSO degrades an
+		// unrecognized value to "shadow"; this write-time check is the operator-feedback layer, so a
+		// typo is rejected in the response to the PUT rather than silently landing on the default.
+		//
+		// retention_mode is the one on this surface where a rejected typo matters most, and in the
+		// opposite direction from dispatch_mode's: an operator who meant `enforce` and typed `enfroce`
+		// would, without this check, get a Control that silently deletes NOTHING and a send_logs table
+		// that grows until the disk fills. The failure is slow, quiet, and discovered by an alert on
+		// something else entirely.
+		if perr := validateEnumString(key, value, "off", "shadow", "enforce"); perr != nil {
+			return perr
+		}
 	case "alert_webhook_url":
 		// Phase 9.5 B4 §6: empty (disabled) or an http(s):// URL. Rejecting a garbage value here,
 		// rather than at webhook-fire time, means a typo'd URL is caught by the write, not silently

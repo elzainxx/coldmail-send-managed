@@ -97,7 +97,9 @@ type Config struct {
 	DispatchEnabled                   bool           // dispatch_enabled — B1 global panic switch (§1.1); a severity FLOOR of accept_and_defer, see rung.go
 	DispatchMode                      string         // dispatch_mode — the graduated rung ladder, send_managed_0025 (fix-plan item 12); read through EffectiveRung(), never directly by a gate
 	AutoquarantineMode                string         // autoquarantine_mode — B2 shadow ladder off|shadow|enforce (§2.1)
-	AutopauseEnabled                  bool           // autopause_enabled — B2 kill-switch (§2.2)
+	AutopauseEnabled                  bool           // autopause_enabled — B2 kill-switch (§2.2); a CEILING on AutopauseMode, see mutator_mode.go
+	AutopauseMode                     string         // autopause_mode — shadow ladder off|shadow|enforce, send_managed_0026 (item 13); read through EffectiveAutopauseMode(), never directly
+	RetentionMode                     string         // retention_mode — shadow ladder off|shadow|enforce, send_managed_0026 (item 13); read through EffectiveRetentionMode(), never directly
 	VariationEnabled                  bool           // variation_enabled — B2 master kill-switch (§2.3)
 	AlertWebhookURL                   string         // alert_webhook_url — B4 optional outbound webhook (§4.3); "" = disabled
 	HealthMetricsWindowSec            int            // health_metrics_window_sec — B3 rolling window (§3.2)
@@ -333,6 +335,18 @@ func LoadConfig(ctx context.Context, db *pgxpool.Pool) (Config, error) {
 		return c, err
 	}
 	if c.AutopauseEnabled, err = readBoolKey(ctx, db, "autopause_enabled"); err != nil {
+		return c, err
+	}
+	// send_managed_0026 (fix-plan item 13). Both are read as hard requirements, exactly like
+	// dispatch_mode and autoquarantine_mode: a missing row is a boot failure, not a silent default. The
+	// fail-safe lives in EffectiveAutopauseMode/EffectiveRetentionMode (mutator_mode.go), which handle
+	// an unrecognized VALUE — a different question from an absent ROW, and the reason a graceful
+	// default here would be wrong (a Control that boots and deletes rows an operator believed were
+	// merely being counted is worse than one that refuses to boot).
+	if c.AutopauseMode, err = readStringKey(ctx, db, "autopause_mode"); err != nil {
+		return c, err
+	}
+	if c.RetentionMode, err = readStringKey(ctx, db, "retention_mode"); err != nil {
 		return c, err
 	}
 	if c.VariationEnabled, err = readBoolKey(ctx, db, "variation_enabled"); err != nil {

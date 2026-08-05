@@ -121,7 +121,35 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
     - autoquarantine_mode         (off | shadow | enforce; default shadow) — shadow
                                     logs the action it WOULD take before any phase makes
                                     it act; default is never enforce.
-    - autopause_enabled           (default true)
+    - autopause_mode              (off | shadow | enforce; default shadow) — the same
+                                    ladder on auto-pause (send_managed_0026). shadow
+                                    EVALUATES the pause decision and records it as an
+                                    account_events observation row (from_flags ==
+                                    to_flags), then does not pause. Unrecognized
+                                    resolves to shadow, never enforce and never off.
+    - retention_mode              (off | shadow | enforce; default shadow) — the same
+                                    ladder on the send_logs retention sweep. shadow
+                                    counts the expired rows and logs the count, deleting
+                                    nothing. NOTE the standing cost: at shadow,
+                                    send_logs grows without bound, so promoting this to
+                                    enforce is a REQUIRED go-live step
+                                    (Docs/go-live-checklist.md §12), not a nicety.
+    - autopause_enabled           (panic switch; default true) — RETAINED (Rule 5) and
+                                    still honored: composed as a severity CEILING of
+                                    autopause_mode (false caps the effective mode at
+                                    off), not a second independent lever. Same rule as
+                                    dispatch_enabled's FLOOR — a boolean can only ever
+                                    reduce what the system does — stated on the inverse
+                                    scale, because these two ladders order by ACTIVITY
+                                    while dispatch_mode orders by SEVERITY (ADR-0014).
+    - Every autonomous mutator — every write the Control makes on its own initiative,
+      as distinct from transcribing a worker report or executing an operator request —
+      is on one of these ladders or explicitly excluded with a recorded reason. That is
+      held by a MECHANISM, not by this list: TestMutatorMode_EveryAutonomousMutator
+      IsDialledOrExplicitlyExcluded discovers every file in internal/dispatch that
+      writes to send_managed.* and fails naming any file in neither map. A new
+      autonomous mutator therefore cannot ship enforcing on day one. A dial gates an
+      ACTION, never its REVERSAL: auto-unpause runs at every value of autopause_mode.
     - variation_enabled           (default true)
     - alert_webhook_url           ("" = alerting off)
 - Control runs as a SINGLETON guarded by a session-level Postgres advisory lock on a

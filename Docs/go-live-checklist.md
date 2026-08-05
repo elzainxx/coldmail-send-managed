@@ -134,7 +134,23 @@ surface (P9-A, RULED — Phase 9 §5.4a). Worker lifecycle is an out-of-band ope
 
 ---
 
-## 6. Decide when to promote auto-quarantine from `shadow` to `enforce`
+## 6. Decide when to promote auto-quarantine — and auto-pause — from `shadow` to `enforce`
+
+> **Since `send_managed_0026` (fix-plan item 13) this section covers TWO dials.** `autopause_mode`
+> joined `autoquarantine_mode` on the same `off`/`shadow`/`enforce` ladder, seeded `shadow` for the same
+> reason, and everything below applies to it with `throttle` substituted for the quarantine trigger:
+> in `shadow` a throttle outcome writes a `shadow_would_pause` observation row to `account_events` and
+> the account keeps sending, and `PUT /v1/admin/config/autopause_mode {"value":"enforce"}` restores the
+> pre-`0026` behaviour with no redeploy. What to watch is whether `throttle_pause_seconds` and your
+> provider's actual rate-limit responses agree — a pause that fires on every routine `450` is a
+> throttle threshold mis-calibrated for that provider, and a real tenant stops sending for its
+> duration each time.
+>
+> `autopause_enabled` still works and is still honoured, composed as a CEILING: `false` caps the dial at
+> `off` no matter what `autopause_mode` says. Setting the boolean to `true` does **not** promote a mode
+> you left in `shadow` — promotion is always an explicit write to `autopause_mode`.
+>
+> **The third dial, `retention_mode`, is NOT this item.** It is REQUIRED and blocking — see item 12.
 
 **Why it's a checklist item:** `autoquarantine_mode` seeds `shadow` (Phase 9.5 §2.1) — a
 deliberate launch-safety default. In `shadow`, the Control computes the SAME quarantine decision it
@@ -265,6 +281,56 @@ then a small real batch. It is written to be small, to addresses you control, an
 
 ---
 
+## 12. Promote `retention_mode` to `enforce` (REQUIRED — `send_logs` grows without bound until you do)
+
+**Why it blocks:** `send_managed_0026` (fix-plan item 13) seeds `retention_mode` at `shadow`, which
+means **the retention sweep deletes nothing**. It counts what it would drop and logs it; the rows stay.
+So on a freshly migrated deployment, `send_managed.send_logs` — which holds **recipient address,
+subject, body, headers and SMTP response** for every send — accumulates forever, and:
+
+- **The retention promise is not being kept.** `debug_log_retention_days` reads like a bound and is not
+  one while this dial is at `shadow`. `Docs/security-posture.md` is explicit that
+  `debug_log_retention_days` is a *privacy* decision rather than a tuning one, and that a database dump
+  inside the retention window exposes message content and recipient lists. At `shadow` there is no
+  window — every dump is inside it.
+- **The disk bill is unbounded**, and the growth is in the widest rows in the schema.
+
+This is the deliberate cost of seeding the dial safe (ADR-0014 decision 2: a safety default that has to
+be opted into is not a default). It is a blocking checklist item precisely because the safe seed makes
+it silent otherwise.
+
+**Do this:**
+
+1. Confirm `debug_log_retention_days` is the value you actually intend — this promotion makes it real
+   for the first time. Check it against your own privacy commitments, not just against a plausible
+   number.
+2. Read the shadow line the sweep logs on every tick and note the count:
+   ```
+   retention: retention_shadow_would_delete — retention_mode="shadow", so NOTHING was deleted this
+   tick; 41823 expired send_logs row(s) would be dropped at retention_mode=enforce. send_logs GROWS
+   WITHOUT BOUND until this dial is promoted
+   ```
+   If that number is large because the deployment has been running at `shadow` for a while, the FIRST
+   enforcing sweep will delete all of it. `maxSweepBatchesPerTick` bounds one tick's work (default
+   64 × 1000 = 64k rows), so a big backlog drains over several ticks rather than in one statement —
+   but plan the promotion for a window when you can watch it, not at peak.
+3. Promote: `PUT /v1/admin/config/retention_mode {"value":"enforce"}`. No redeploy, no restart — the
+   very next sweep tick acts.
+4. Verify on the next tick: the shadow line stops and
+   `retention: dropped N expired send_logs row(s) (raw content only; job_events + final job states
+   untouched)` appears instead.
+5. **`shadow` and `off` both remain available afterwards**, and one of them is the right answer during
+   an incident: if a sweep is dropping more than you expect, demote to `shadow` to stop the deletions
+   while keeping the count visible. The dial is re-read every tick in both directions.
+
+**What promoting does NOT put at risk:** the sweep touches `send_managed.send_logs` and nothing else at
+any value of the dial. Job outcomes — `job_events` and final `jobs` states — are permanent by
+construction (Phase 7 §3.2), which is asserted against the sweep's own source, so per-day reporting
+still works for a swept day. What is lost at the drop is signal that lived only in the raw rows:
+recipient-domain distribution and `smtp_response` text (the accepted V1 cost, Phase 7 §3.2).
+
+---
+
 ## Order of operations (recommended)
 
 1. **Before the first live migration run:** items 2 (column shapes) and 3 (advisory-lock band +
@@ -281,15 +347,25 @@ then a small real batch. It is written to be small, to addresses you control, an
    provisioning) and 7 (account pre-warming) — the system has no capacity to route a job until
    these are done. Then item 11 (the real-provider smoke test) — the first live send is a
    deliberate, small, watched one, never a campaign.
-5. **After a launch-safety observation window:** item 6 (auto-quarantine promotion) — deliberately
-   NOT day-one; give the shadow ladder real time to prove itself first.
+5. **Before the first live send, alongside item 4:** item 12 (`retention_mode=enforce`). Placed here
+   and not later because from the first real send onward `send_logs` is accumulating recipient
+   addresses and message bodies with no bound — the exposure starts with the data, so the bound has to
+   as well. It is the one item on the "promote a shadow dial" list that is REQUIRED rather than
+   deferred, because leaving it is not a cautious choice but an unbounded one.
+6. **After a launch-safety observation window:** item 6 (auto-quarantine **and auto-pause**
+   promotion) — deliberately NOT day-one; give both shadow dials real time to prove themselves first.
+   These two are genuinely deferrable: leaving them at `shadow` costs observation rows and a control
+   that is not yet acting, not unbounded growth.
 
 ## Final pre-flight (run immediately before flipping live traffic on)
 
 - [ ] `scripts/dev.sh test` (or the prod-equivalent harness invocation) is green — full behavioral
       suite against the ACTUAL deployed images, not a stale build.
-- [ ] All 6 CI gates green: `config_drift`, `contract_drift`, `migration_lint`,
-      `config_consumption`, `no_secret_leak`, `drain_grace`.
+- [ ] All 9 CI gates green: `config_drift`, `contract_drift`, `migration_lint`,
+      `config_consumption`, `config_consumption_selftest`, `no_secret_leak`, `drain_grace`,
+      `test_enumeration`, `test_enumeration_selftest`. (The two `_selftest` gates are paired controls:
+      each deliberately breaks the gate it names and fails if that gate stays green, so a gate cannot
+      quietly stop checking anything.)
 - [ ] The deployment's SIGTERM grace clears `shutdown_drain_timeout_sec` — `stop_grace_period` if
       you run under Compose, `TimeoutStopSec` if you run under systemd, and **both** if the unit
       wraps a compose file (the shorter of the two wins). `drain_grace` checks the committed dev
@@ -299,8 +375,12 @@ then a small real batch. It is written to be small, to addresses you control, an
 - [ ] `GET /readyz` reports `db:true, singleton_lock:true`.
 - [ ] `GET /v1/admin/health` shows the expected pool(s) with non-`exhausted` headroom and
       `dispatch_paused:false`.
-- [ ] Items 1–5 and 7–11 above are done; item 6 is deliberately deferred to a post-launch
-      observation window, per its own section.
+- [ ] Items 1–5, 7–11 and **12** above are done; item 6 is deliberately deferred to a post-launch
+      observation window, per its own section. Item 12 (`retention_mode=enforce`) is NOT deferrable
+      the way item 6 is: until it is promoted, `send_logs` accumulates recipient addresses and message
+      bodies with no bound and the retention promise in `security-posture.md` is not being kept. If you
+      are flipping live traffic on with `retention_mode` still at `shadow`, that is a decision someone
+      has to have made on purpose, not a box left unchecked.
 - [ ] The master key backup **and drill** (item 8) are done. This is the one item on this page whose
       omission cannot be corrected after the fact.
 - [ ] You have read [`future-work.md`](./future-work.md) and accept the V1 limits it records —

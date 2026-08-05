@@ -2,8 +2,12 @@
 # One key name per line. The CI config_drift gate asserts:
 #   live send_managed.config key set  ==  this manifest  ==  the config-reference.md table.
 # Each config-seeding migration (Phase 1's send_managed_0010 onward) appends its keys here in the
-# SAME change, so the gate grows monotonically to the eventual 53-key total after send_managed_0021
-# (amended from 50 — P8-OD-1, Phase 8 grew from 14 to 17 keys post-Chunk-5).
+# SAME change, so the gate grows monotonically. Current total: 57 =
+#   14 (0010) + 3 (0017) + 2 (0018) + 6 (0019) + 17 (0020) + 12 (0021 & 0023) + 1 (0025) + 2 (0026).
+# Phase 9.5's headline "53 keys" was written down before send_managed_0023 added a twelfth key to that
+# group, which is why 53 + 1 + 2 does not reach 57. THE COUNT IN A COMMENT IS NOT THE GATE: the gate is
+# the diff below against the live key set AND Docs/config-reference.md, all three of which must match
+# exactly. A miscount in this header is a doc bug; a missing key is a build failure.
 #
 # Phase 1 — send_managed_0010 (14 keys, the foundation; Phase 9 §4.1).
 daily_limit_default
@@ -87,3 +91,17 @@ brain_singleton_reacquire_interval_sec
 # what it already did. Docs/config-reference.md carries the operator-facing description; ADR-0013
 # records the decision.
 dispatch_mode
+
+# Fix-plan item 13 — send_managed_0026 (+2 keys: a shadow ladder for the two remaining undialled
+# autonomous mutators). BOTH are seeded "shadow", which CHANGES DEFAULT BEHAVIOUR on upgrade: a
+# migrated deployment stops auto-pausing and stops deleting expired send_logs until an operator promotes
+# each dial to "enforce". retention_mode=enforce is therefore a REQUIRED go-live step, not a nicety —
+# left at shadow, send_logs grows without bound (Docs/go-live-checklist.md carries it as a gate).
+#
+# autopause_enabled is RETAINED rather than dropped, for the same reason dispatch_enabled was in 0025:
+# it has live consumers (the health snapshot, the operator runbook). It composes as a CEILING here —
+# enabled=false caps the mode at "off" — which is the same "the boolean can only reduce what the system
+# does" rule dispatch_enabled follows as a FLOOR, stated on the inverse scale. ADR-0014 records why the
+# two ladders are separate machinery; Docs/config-reference.md carries the operator descriptions.
+autopause_mode
+retention_mode

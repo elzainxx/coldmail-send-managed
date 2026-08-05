@@ -92,14 +92,38 @@ func (h *OutcomeHandler) applyAccountEffect(ctx context.Context, tx pgx.Tx, acco
 		}
 	}
 
-	// (Chunk 4 seam #2, wrapped by Phase 9.5 B2 §2.2) auto-pause — the SINGLE place that answers
-	// "should I pause (throttle)?", now gated by the autopause_enabled kill-switch. false = the
-	// decision is never evaluated at all (no ladder, no shadow row — auto-pause is self-reversing,
-	// §2.2, so it gets a simple on/off, not the quarantine ladder's observation path).
-	if cfg.AutopauseEnabled && pauseDecision(class, before) {
-		after.Paused = true
-		reason := "throttle"
-		after.PauseReason = &reason
+	// (Chunk 4 seam #2, Phase 9.5 B2 §2.2, GRADUATED by fix-plan item 13 / send_managed_0026) auto-pause
+	// — the SINGLE place that answers "should I pause (throttle)?", now gated by the same three-way
+	// ladder auto-quarantine already had:
+	//   enforce — the pre-0026 behaviour: the decision sets the flag (event written below).
+	//   shadow  — decide, but do NOT set the flag; log a SEPARATE would-pause observation row. The
+	//             account keeps sending through the throttle.
+	//   off     — no decision at all (pauseDecision is never evaluated), no row.
+	//
+	// Read ONLY through the Effective* methods (mutator_mode.go), which normalize an unrecognized value
+	// to shadow and compose the RETAINED autopause_enabled boolean as a CEILING — enabled=false caps the
+	// mode at off, so an operator who disabled auto-pause never receives one regardless of the mode
+	// string. Reading cfg.AutopauseMode or cfg.AutopauseEnabled directly here would honour half the
+	// control, which is the defect item 12 fixed on the dispatch side.
+	//
+	// §2.2's original reasoning for giving pause a boolean rather than a ladder was that auto-pause is
+	// SELF-REVERSING (auto-unpause clears it after throttle_pause_seconds) and so needs no observation
+	// period. Item 13 overrides that: self-reversing is not the same as harmless — a throttle pause
+	// stops a tenant's sending for its duration, which is a live, caller-visible effect that an operator
+	// should be able to watch before it acts. The reversal itself is NOT gated by this dial (see
+	// eligibility.go): blocking a reversal would leave real pauses in place forever, manufacturing the
+	// stuck-account incident the observation period exists to avoid.
+	if cfg.AutopauseDecides() && pauseDecision(class, before) {
+		if cfg.AutopauseWrites() {
+			after.Paused = true
+			reason := "throttle"
+			after.PauseReason = &reason
+		} else {
+			// shadow: record the decision, change nothing. Deliberately does NOT touch `after`.
+			if err := h.writeShadowPauseEvent(ctx, tx, accountID, uid, before); err != nil {
+				return err
+			}
+		}
 	}
 
 	// Write the flag change + stamp throttle_paused_at when a NEW throttle pause was set (§4.3 —
@@ -249,6 +273,40 @@ func (h *OutcomeHandler) writeShadowQuarantineEvent(ctx context.Context, tx pgx.
 // shadowWouldQuarantineReason renders the §2.1 structured marker string verbatim.
 func shadowWouldQuarantineReason(score, threshold int, trigger string) string {
 	return "shadow_would_quarantine: score=" + strconv.Itoa(score) + " threshold=" + strconv.Itoa(threshold) + " trigger=" + trigger
+}
+
+// writeShadowPauseEvent records a would-pause observation at autopause_mode=shadow (fix-plan item 13).
+//
+// Same schema-neutral encoding as the quarantine shadow row above, and for the same reason: it uses
+// only LOCKED account_events columns and the existing `updated` action from the locked event_actor /
+// action vocabulary, with from_flags == to_flags making it self-evidently a no-op observation rather
+// than a state change a reader might replay. Rule 5 is additive-only on those enums, so a new
+// `would_pause` action value would be a schema change to record something the reason string already
+// says unambiguously.
+//
+// It is a SEPARATE row from the quarantine marker, not a shared "shadow decision" row, because the two
+// decisions are independent: one outcome can trip neither, either, or (across classes) both, and
+// collapsing them would make "which mutator wanted to act" unrecoverable from the audit trail — the one
+// question an operator running an observation period is trying to answer.
+func (h *OutcomeHandler) writeShadowPauseEvent(ctx context.Context, tx pgx.Tx, accountID, userID string, current accountFlagState) error {
+	flagsJSON, err := json.Marshal(current)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx,
+		`INSERT INTO send_managed.account_events
+		   (account_id, user_id, actor, action, from_flags, to_flags, reason, request_id)
+		 VALUES ($1, $2, 'system', 'updated', $3, $3, $4, NULL)`,
+		accountID, userID, flagsJSON, shadowWouldPauseReason())
+	return err
+}
+
+// shadowWouldPauseReason renders the item-13 marker. `trigger=throttle` is spelled out even though
+// throttle is currently the only class that reaches pauseDecision: the quarantine marker distinguishes
+// its two triggers, and a grep for `shadow_would_pause: trigger=` should keep working when a second
+// pause trigger appears rather than needing the format changed under it.
+func shadowWouldPauseReason() string {
+	return "shadow_would_pause: trigger=throttle pause_reason=throttle"
 }
 
 // deriveAccountAction maps a flag delta to the audit action + internal reason (§4.2). Quarantine

@@ -75,3 +75,10 @@ variation_zero_width_rate_pct|RESERVED
 variation_css_micro_params|VariationCSSMicroParams
 brain_singleton_reacquire_interval_sec|readSingletonReacquireInterval
 dispatch_mode|DispatchMode
+# Item 13's two dials. The pattern names the EFFECTIVE-reader, not the struct field, deliberately: the
+# gate then proves the gate site goes through mutator_mode.go's fail-safe normalization rather than
+# reading cfg.AutopauseMode raw, which would honour half the control (the defect item 12 fixed).
+# The pattern is an ERE alternation: `read -r key pattern` puts everything after the FIRST `|` into
+# pattern, so a second `|` is an alternation inside the pattern, not a third field.
+autopause_mode|AutopauseDecides|AutopauseWrites
+retention_mode|RetentionCounts|RetentionDeletes

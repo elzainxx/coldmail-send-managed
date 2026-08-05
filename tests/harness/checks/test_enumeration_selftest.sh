@@ -30,9 +30,17 @@
 #      literal string "go_suite()" into the enumerated list. That would not mask a real package, but
 #      case 5 pins the parse so a future "simplification" of that grep cannot go unnoticed.)
 #   6. a *_test.go under vendor/        -> OK. The exclusion holds; vendored tests are not ours.
+#   7. a gate step DELETED, with a comment naming its path left behind -> FAIL. The 2026-08-05
+#      defect, found in module 3 on identical code: rule 2 grepped the whole workflow, so the TODO
+#      satisfied it. A commented-out step is the likeliest way to disable a gate.
+#   8. the gate invoked inside a `run: |` BLOCK SCALAR -> OK. The load-bearing partner to case 7:
+#      the fix must count real multi-line run bodies, or it would reject correct workflows and the
+#      next person would "fix" the gate by loosening it back to grepping the file.
+#   9. a `#` in a step NAME does not wire a gate -> FAIL. Narrows the fix: only `run:` counts, not
+#      any line that happens to survive comment-stripping.
 #
-# Case 1 and case 6 are load-bearing: without them, a gate broken to reject EVERYTHING would pass
-# cases 2-5 and this script would call that correct.
+# Cases 1, 6 and 8 are load-bearing: without them, a gate broken to reject EVERYTHING would pass
+# cases 2-5, 7 and 9 and this script would call that correct.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 REPO="$(pwd)"
@@ -166,7 +174,62 @@ mkdir -p "$TMP/vendor/github.com/someone/lib"
 : >"$TMP/vendor/github.com/someone/lib/lib_test.go"
 expect "a vendored *_test.go is correctly ignored" 0 "test_enumeration OK"
 
+# --- THE PROSE-SATISFACTION DEFECT (cases 7-9, added 2026-08-05) ---------------------------------
+# Rule 2 used to grep the whole workflow FILE for the gate's path, and asserted in its own comment
+# that using the path rather than the bare filename made a comment unable to satisfy it. Wrong, and
+# break-verified in module 3 on this identical code: deleting the drain_grace.sh step and leaving
+# `# TODO: re-enable bash tests/harness/checks/drain_grace.sh` behind left the gate GREEN, reporting
+# all 10 gate scripts wired about a workflow running nine.
+#
+# 7. The defect itself. The orphan gate is REAL and on disk; only its step is gone.
+reset_fixture
+: >"$TMP/tests/harness/checks/disabled_gate.sh"
+cat >"$TMP/$WORKFLOW" <<'EOF'
+jobs:
+  behavioral:
+    steps:
+      - run: bash tests/harness/checks/test_enumeration.sh
+      # TODO: re-enable bash tests/harness/checks/disabled_gate.sh — flaky on the CI runner
+EOF
+expect "a COMMENTED-OUT gate step does not count as wired" 1 \
+  "named nowhere in" "disabled_gate.sh"
+
+# 8. A real `run: |` block scalar must still count. Load-bearing in the strict sense: the obvious
+#    narrow fix (require the path on a line matching `^\s*(-\s+)?run:`) would REJECT this correct
+#    workflow — and this repo's own workflow uses exactly that form for its gofmt/vet step, so the
+#    narrow fix would have broken a live tree. A gate that fails on valid input is how exemption
+#    lists get born.
+reset_fixture
+: >"$TMP/tests/harness/checks/block_gate.sh"
+cat >"$TMP/$WORKFLOW" <<'EOF'
+jobs:
+  behavioral:
+    steps:
+      - name: gates
+        run: |
+          bash tests/harness/checks/test_enumeration.sh
+          bash tests/harness/checks/block_gate.sh
+EOF
+expect "a gate invoked inside a 'run: |' block is wired" 0 "test_enumeration OK"
+
+# 9. Narrowing: comment-stripping alone is not the rule — the text must be a RUN command. A step
+#    name mentioning the path is prose, exactly like a comment, and must not wire anything.
+reset_fixture
+: >"$TMP/tests/harness/checks/named_only_gate.sh"
+cat >"$TMP/$WORKFLOW" <<'EOF'
+jobs:
+  behavioral:
+    steps:
+      - run: bash tests/harness/checks/test_enumeration.sh
+      - name: formerly ran tests/harness/checks/named_only_gate.sh
+        run: echo skipped
+EOF
+expect "a gate named only in a step NAME does not count as wired" 1 \
+  "named nowhere in" "named_only_gate.sh"
+
 if [[ "$fail" -eq 0 ]]; then
-  echo "test_enumeration_selftest OK: 6 cases (2 accept, 4 reject) + both scripts confirmed wired in CI"
+  echo "test_enumeration_selftest OK: 9 cases (3 accept, 6 reject) + both scripts confirmed wired in"
+  echo "  CI — rule 1's enumeration (2,4,5), the vendor exclusion (6), and rule 2's run-command"
+  echo "  matching incl. the comment-satisfied defect found 2026-08-05 (7-9)"
 fi
 exit "$fail"

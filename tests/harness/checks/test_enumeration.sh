@@ -95,12 +95,64 @@ fi
 # A gate on disk that the workflow never names is indistinguishable from a gate that passes: local
 # runs (and any `for g in checks/*.sh` loop) execute it, CI does not. That is how module 3's
 # config_consumption_selftest.sh — a BLOCKING control — landed unwired.
+#
+# THE MATCH IS AGAINST EXECUTED COMMANDS, NOT THE WORKFLOW FILE (fixed 2026-08-05). This rule used to
+# grep the whole workflow for the gate's path, and its own comment claimed that matching the path
+# rather than the bare filename meant "a passing mention inside a comment cannot satisfy this." That
+# claim was FALSE, and break-verification is what showed it — in module 3 first, on the identical code:
+# deleting the drain_grace.sh step outright and leaving behind
+#     # TODO: re-enable bash tests/harness/checks/drain_grace.sh — flaky on the CI runner
+# left the gate GREEN, reporting all 10 gate scripts wired about a workflow that ran nine. A
+# commented-out step is the LIKELIEST way to reach this — it is exactly what someone writes while
+# disabling a gate they mean to restore — and it is precisely when a blocking gate stops blocking.
+#
+# This is the third instance of one shape found in a single day: module 1's rule 1 matched
+# `go test ./...` inside a comment ABOUT ITSELF, both config_consumption gates accepted a TODO naming
+# a config key as that key's consumer, and now this. A gate satisfied by PROSE about the thing it
+# guards. In every case the gate's own comments asserted it was immune, and in every case only
+# breaking the guarded thing and watching the gate revealed otherwise. Reasoning about a gate cannot
+# find this class; that is the standing lesson.
+workflow_commands() {
+  # Emit ONLY the shell text the workflow actually EXECUTES: the value of every `run:` key, including
+  # the body of `run: |` block scalars, with comments stripped. Anything else in the YAML — a `name:`,
+  # a full-line comment, a trailing comment — is prose about the workflow, not the workflow.
+  #
+  # A `#` begins a comment at start-of-line or after whitespace (YAML's rule, and close enough to the
+  # shell's inside a run block: a shell comment in a run block does not invoke anything either).
+  # Verified against all three repos' workflows before adopting: no `run:` line contains a ` #`, so
+  # nothing real is truncated. Block-scalar membership is "indented deeper than the `run` key
+  # itself" — measured from `run`, not from the line's leading whitespace, so a `- run: |` list-item
+  # form cannot swallow its sibling keys.
+  awk '
+    function strip(s) { sub(/(^|[ \t])#.*$/, "", s); return s }
+    {
+      if (inblock) {
+        if ($0 ~ /^[ \t]*$/) { next }
+        match($0, /^[ \t]*/)
+        if (RLENGTH > blockind) { print strip($0); next }
+        inblock = 0
+      }
+      if ($0 ~ /^[ \t]*(-[ \t]+)?run:/) {
+        blockind = index($0, "run:") - 1
+        rest = $0
+        sub(/^[ \t]*(-[ \t]+)?run:[ \t]*/, "", rest)
+        if (rest ~ /^[|>]/) { inblock = 1; next }
+        print strip(rest)
+      }
+    }
+  ' "$1"
+}
+
+# `|| true`: a workflow with no `run:` key at all yields nothing. An empty $CMDS must still be allowed
+# to reach the loop below and fail every gate LOUDLY, rather than dying here with no output — the same
+# reasoning as rule 1's `|| true`, and as the fix for config_consumption's silent death on an emptied
+# ledger, found the same day.
+CMDS="$(workflow_commands "$WORKFLOW" || true)"
+
 unwired=""
 for g in "$CHECKSDIR"/*.sh; do
   base="$(basename "$g")"
-  # Match the path as it appears in a workflow `run:` line, not the bare filename, so a passing
-  # mention inside a comment cannot satisfy this.
-  if ! grep -qF "$CHECKSDIR/$base" "$WORKFLOW"; then
+  if ! grep -qF "$CHECKSDIR/$base" <<<"$CMDS"; then
     unwired+="$base"$'\n'
   fi
 done
@@ -110,6 +162,8 @@ if [[ -n "${unwired//[$'\n']/}" ]]; then
   echo "  The workflow enumerates each gate as its own step; it does NOT glob. An unenumerated gate"
   echo "  never runs in CI, so it is a green signal that proves nothing:"
   printf '%s' "$unwired" | sed '/^$/d;s/^/    - /'
+  echo "  NOTE: only a 'run:' command counts. A COMMENTED-OUT step naming the gate does not satisfy"
+  echo "  this — that was a real defect here until 2026-08-05, and a disabled gate is the whole point."
   echo "  Fix: add a step to $WORKFLOW. Use 'if: always()' so one gate's failure does not mask the rest."
   fail=1
 fi

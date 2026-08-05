@@ -49,6 +49,14 @@ jobs:
         if: always()
         run: bash tests/harness/checks/config_consumption.sh
 
+      # The PAIRED CONTROL for the step above. A separate step, not folded into the gate, so a failure
+      # names which of the two broke. Load-bearing: the real 54-key ledger reaches NONE of the gate's
+      # failure branches, and one of them (the consumer grep) was found on 2026-08-05 to accept a
+      # COMMENT as a consumer. Needs no database or stack — it builds a throwaway repo skeleton.
+      - name: Consumption gate SELF-TEST — the failure branches the real ledger never reaches (BLOCKING)
+        if: always()
+        run: bash tests/harness/checks/config_consumption_selftest.sh
+
       # The META-GATE: it checks that the other gates and the test suites are actually WIRED.
       # internal/httpapi's first test file (e3fee99) landed with nothing running it, and two more
       # packages — workerlink, workerproto — accumulated behind the prose warning run.sh added after

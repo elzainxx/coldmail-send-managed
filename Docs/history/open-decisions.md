@@ -1,5 +1,7 @@
 # Open Decisions ledger ("flag, don't fix")
 
+> **OWNER: MODULE 2 (`coldmail-send-managed`), and this is module 2's OWN copy — the original.** Ids here are module 2's (`OD-4`, `OD-13`, `P8-OD-1`, …), never `M3-P*-OD-*`. A verbatim copy of this file was carried into module 3 (`coldmail-send-byo/Docs/history/open-decisions.md`) at this same relative path so inherited-code citations keep resolving; that copy carries the mirror-image warning, since in module 3's tree it sits one directory below module 3's own living ledger and the shared filename made it easy to mistake for module 3's history. Nothing in module 3 is ruled here (added 2026-08-05).
+
 Every contradiction, ambiguity, or assumption that needs a ruling — never silently resolved
 (CLAUDE.md Rule 2). Items ruled by the user are marked **RULED** with the disposition
 implemented. Items where Phase 0 applied the plan's *recommended* disposition as its build

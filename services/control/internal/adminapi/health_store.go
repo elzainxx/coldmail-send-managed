@@ -22,6 +22,7 @@ type healthSnapshot struct {
 	WindowSec   int
 
 	DispatchPaused  bool
+	DispatchRung    string // fix-plan item 12: the EFFECTIVE rung (both dials composed), not a raw config value
 	TicksPerMin     float64
 	SendsLastWindow int
 	SendRatePerMin  float64
@@ -85,13 +86,20 @@ type shadowDecision struct {
 }
 
 // buildHealthSnapshot runs every read for the §3.2 response. windowSec is health_metrics_window_sec
-// (already loaded by the caller); dispatchEnabled/autoquarantineMode are the live config values the
-// caller already read (single source of truth — this function does not re-read config).
-func buildHealthSnapshot(ctx context.Context, db *pgxpool.Pool, windowSec int, dispatchEnabled bool, autoquarantineMode string) (healthSnapshot, error) {
+// (already loaded by the caller); rung/autoquarantineMode are the live config values the caller
+// already read (single source of truth — this function does not re-read config).
+//
+// THE PARAMETER IS THE RESOLVED RUNG, NOT dispatch_enabled (fix-plan item 12). It was the boolean
+// until send_managed_0025. Taking the resolved rung means this function cannot compute
+// `dispatch_paused` from half the inputs — which is the bug the ladder would otherwise have introduced
+// here, since a `stopped` rung with dispatch_enabled=true would have reported "not paused" while
+// nothing dispatched. The composition happens once, in resolveRung, at the caller.
+func buildHealthSnapshot(ctx context.Context, db *pgxpool.Pool, windowSec int, rung string, autoquarantineMode string) (healthSnapshot, error) {
 	snap := healthSnapshot{
 		GeneratedAt:    time.Now().UTC(),
 		WindowSec:      windowSec,
-		DispatchPaused: !dispatchEnabled,
+		DispatchPaused: rung != rungServing,
+		DispatchRung:   rung,
 	}
 
 	q, err := queryQueueCounts(ctx, db)

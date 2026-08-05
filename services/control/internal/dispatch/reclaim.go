@@ -137,6 +137,31 @@ func (d *Dispatcher) ReclaimTick(ctx context.Context) (Config, int, error) {
 	if err != nil {
 		return Config{}, 0, err
 	}
+	// Fix-plan item 12: the DEEPEST rung freezes the reclaim sweep. This is the only column that
+	// distinguishes `stopped` from `refuse_new`, and it is deliberately the last thing to stop: with a
+	// dead worker holding an expired lease, refuse_new returns that job to `queued` and stopped leaves
+	// it `sending` until the rung is released.
+	//
+	// NOTHING IS STRANDED BY THIS. Both detectors are DB-predicate-driven — Detector A reads
+	// boxes.last_heartbeat_at, Detector B reads `lease_expires_at < NOW()` — so a skipped sweep loses
+	// no information whatsoever: the worker is still silent and the lease is still expired on the
+	// first tick after release, and the job has not moved. It is safe to freeze *because* claiming
+	// already stopped two rungs earlier: no new lease is taken while frozen, so every in-flight row
+	// belongs to a pre-pause attempt. (M1's ADR-0015 §3 reaches the same conclusion about its own
+	// drainer's reclaim sweep, on the same invariant.)
+	//
+	// WHY AN OPERATOR WOULD WANT THIS. Reclaim REASSIGNS in-flight jobs (sending→queued). During an
+	// incident where you suspect the send path itself — a provider mangling messages, a pool-wide
+	// credential problem — requeueing is not neutral: it is the system queueing up another attempt at
+	// the thing you are trying to stop. Freezing the sweep holds the jobs exactly as they are for
+	// inspection. The cost is real and stated in the docs: a job whose worker died during a `stopped`
+	// pause waits out the pause before anyone reclaims it.
+	//
+	// Nothing here writes, so a frozen tick is a pure no-op — no state change, no job_events row.
+	if !cfg.ReclaimAllowed() {
+		d.logReclaimFrozenByOperator(cfg)
+		return cfg, 0, nil
+	}
 	reclaimed := 0
 	if nA, err := d.reclaimDeadWorkers(ctx, cfg); err != nil {
 		if IsOutage(err) {

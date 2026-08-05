@@ -82,6 +82,7 @@ The full, additive-only `error.code` enum:
 | 422 | `unprocessable` | Well-formed but semantically illegal (illegal state transition, fallback cycle, owner-rule violation). |
 | 429 | `rate_limited` | Admin rate limit — off by default in V1. |
 | 500 | `internal_error` | Unexpected. Generic message only; reason in logs. |
+| 503 | `paused` | The dispatch rung is at `refuse_new` or `stopped`, so `POST /v1/run` will not accept new work (fix-plan item 12, `send_managed_0025`). Distinct from `409 conflict`: a conflict is about THIS request (a duplicate, a limit, an already-active campaign) and retrying it unchanged will keep failing; `paused` is about the MODULE's current condition and the identical request succeeds once an operator raises the rung. That is why it is `503` and not `409` or `422` — it is the status whose retry semantics are "later, unchanged". The two deeper rungs are the only ones that refuse; `serving` and `accept_and_defer` both still accept (`accept_and_defer` deliberately keeps intake open while sending stops, so a halt loses no submissions). `/v1/quote` is NEVER gated by the rung. |
 
 ### The envelope covers ROUTING failures too, not only handler failures
 
@@ -249,7 +250,8 @@ For how to *interpret* these numbers, see [`operator-runbook.md`](./operator-run
 |---|---|---|
 | `generated_at` | string (RFC 3339 UTC) | when the snapshot was computed |
 | `window_sec` | int | the rolling window all `*_last_window` fields cover (`health_metrics_window_sec`) |
-| `dispatch.dispatch_paused` | bool | live `dispatch_enabled` inverted |
+| `dispatch.dispatch_paused` | bool | **RETAINED (Rule 5), meaning widened by fix-plan item 12 (`send_managed_0025`): "the effective rung is not `serving`"** — true when `dispatch_enabled=false` OR `dispatch_mode` is any of the three paused rungs. Every input that made it true before still does; what changed is that it no longer reads `false` while the Control is halted by the newer dial |
+| `dispatch.dispatch_rung` | string | **ADDITIVE, fix-plan item 12 (`send_managed_0025`).** `serving` \| `accept_and_defer` \| `refuse_new` \| `stopped` — the rung the Control is ACTUALLY at, i.e. the composition of both dials (max severity, with `dispatch_enabled=false` acting as a FLOOR of `accept_and_defer`), never the raw value of the `dispatch_mode` row. An unrecognized mode is reported as `accept_and_defer` because that is what the Control does with it; echoing a garbage string back would tell an operator their pull landed when it did not. Three of the four rungs are "paused" and they differ in whether intake and the reclaim sweep still run, which is exactly what `dispatch_paused` alone cannot express. The two fields can never disagree — `dispatch_paused == (dispatch_rung != "serving")` is asserted directly. **This endpoint fails CLOSED on an unreadable `dispatch_mode`** (`500`, not a guessed rung): a surface whose entire job is stating the system's condition must not invent one field, since an operator acts on what it says — the deliberate opposite of `/v1/run`'s fail-open intake gate |
 | `dispatch.ticks_per_min` | float | observed dispatch cadence |
 | `dispatch.sends_last_window` | int | sends completed inside `window_sec` |
 | `dispatch.send_rate_per_min` | float | derived from the two above |
@@ -333,7 +335,7 @@ internal hostname (two-vocabulary rule). Additive-only: these routes never renam
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/v1/quote` | recipient count → cost (Phase 9 §1, finalized: `cost = recipient_count × unit_price_credits`, unit read LIVE from `send_managed.config`) — response adds the additive `unit_price_credits`/`tier` fields so the platform's preview/confirm-cost step can show the caller why the number is what it is; pure, side-effect-free, idempotent — reserves nothing and creates no job. **`recipient_count` rejections are distinguishable** (see the `details[]` note above): absent/`null` → `required`; present-but-negative → `out_of_range`; wrong JSON type → `malformed` naming the field. `0` is a VALID count (`cost: 0`), not a rejection. **`user_id` is OPTIONAL, ACCEPTED, AND IGNORED** (additive request field, audit finding **D4**/fix-plan item 5): this module's cost is `recipient_count × unit_price_credits` with no tenant term, so `user_id` cannot and must not change the answer — supplying it returns a **byte-identical** response to omitting it, which is pinned by a test rather than merely documented. It exists so ONE request body works against both senders: module 3's `quote` REQUIRES `user_id` (its answer is a per-user feasibility assessment), both modules decode with `DisallowUnknownFields`, and before this field there was no body both accepted. **Validated if present, never required:** a well-formed-but-unknown UUID is accepted (no tenant lookup — `quote` must not become an existence oracle), a malformed one is `400 validation_failed` with `details[]` = `[user_id:malformed]`, the same slug module 3 and this module's own `run`/`report` use; `""` is treated as absent. Making it required would break existing callers, which additive-only forbids |
-| POST | `/v1/run` | accept a job — body `{job_item_id, user_id}` (both UUIDs; `user_id` = owning tenant, REQUIRED) → create one `send_managed.jobs` row, return `202` immediately (async kickoff; never blocks on the send). The `job_item_id` must belong to `user_id` (else `404 not_found`). Duplicate `job_item_id` for the same tenant → clean `200` with the existing job (idempotent; never a raw `23505`). **One active campaign per user (Phase 4 §8, P4-7):** if `user_id` already has a DIFFERENT campaign active (any non-terminal job), the run is rejected outright with `409 conflict` (internal reason `user_campaign_active`) and creates ZERO job rows — enforced under a per-user Postgres advisory lock so concurrent attempts are genuinely serialized, not racy |
+| POST | `/v1/run` | accept a job — body `{job_item_id, user_id}` (both UUIDs; `user_id` = owning tenant, REQUIRED) → create one `send_managed.jobs` row, return `202` immediately (async kickoff; never blocks on the send). The `job_item_id` must belong to `user_id` (else `404 not_found`). Duplicate `job_item_id` for the same tenant → clean `200` with the existing job (idempotent; never a raw `23505`). **One active campaign per user (Phase 4 §8, P4-7):** if `user_id` already has a DIFFERENT campaign active (any non-terminal job), the run is rejected outright with `409 conflict` (internal reason `user_campaign_active`) and creates ZERO job rows — enforced under a per-user Postgres advisory lock so concurrent attempts are genuinely serialized, not racy. **Fix-plan item 12 (`send_managed_0025`) — the dispatch rung gates intake at the two DEEPEST rungs only:** at `refuse_new` or `stopped` this route returns `503 paused` and creates ZERO job rows; at `serving` and `accept_and_defer` it accepts normally. Keeping intake open at `accept_and_defer` is the point of that rung existing — an operator halting sending should not also start losing customer submissions. The gate sits AFTER field validation, so a malformed body still gets its `400 validation_failed` rather than being masked by the pause (a caller must be able to fix their request during a halt), and BEFORE job creation, so a refusal is genuinely lossless rather than a row written then rejected. It fails **OPEN**: an unreadable, absent, or unrecognized `dispatch_mode` accepts the submission and logs at `level=error`, because refusing a submission may lose customer work permanently while accepting one that then sits queued is recoverable — the opposite disposition from `/v1/admin/health`, which fails closed (see its field table below). Note the asymmetry with the Control: a paused rung stops the dispatch loop from CLAIMING, so accepted work waits rather than sends |
 | GET | `/v1/report` | reflect a job's state — `?user_id=<uuid>` (REQUIRED tenant selector) plus `?job_id=` or `?job_item_id=`: returns `state`, `provider_message_id` (when `sent`), `completed_at`, `attempt_count` — clean external state only. **`provider_message_id`/`completed_at` are OMITTED (key absent, not `null`) until set** — a UI must check for key presence, not for `null`, on this single-job shape. A job owned by another tenant → `404 not_found` (no existence disclosure). **Phase 5 (§5.4):** a job WAITING for capacity — its only accounts self-recovering (throttle/daily-limit paused), or an unconfigured shared-pool chain — reads as clean pending `state:"queued"` (never `failed`, never an error, even if it waits until the next daily reset); a job whose entire resolved pool is truly exhausted (all accounts quarantined/disabled/manual-paused) reads `state:"failed"`. The internal reason (`pool_exhausted`, which accounts, why) is NEVER surfaced — two-vocabulary rule. **Phase 6 (§2):** a job RECLAIMED from a dead/hung worker (heartbeat-miss or lease-expiry) returns to clean pending `state:"queued"` with an incremented `attempt_count` (saturating) — the internal reclaim reason (`worker heartbeat missed`/`lease expired`, `actor='reclaim_loop'`) stays internal and is never surfaced; a persistently-reclaimed job never fails by attempt count (it fails only on true pool exhaustion, §2.5). **B8 (Phase 9 contract completion) — `?campaign_id=<uuid>` mode:** when `campaign_id` is present (instead of `job_id`/`job_item_id`), `report` returns the CAMPAIGN-scoped aggregate shape below rather than the single-job shape. |
 
 **B8 — the campaign-scoped `report` response** (`GET /v1/report?campaign_id=<uuid>&user_id=<uuid>`),
@@ -343,7 +345,16 @@ schema change:
 ```jsonc
 {
   "campaign_id": "…",
-  "dispatch_paused": false,           // the live dispatch_enabled config, negated (B1)
+  // B1, WIDENED by fix-plan item 12 (send_managed_0025): "the effective dispatch rung is not
+  // `serving`", which is the union of BOTH dials — `dispatch_enabled=false` OR a `dispatch_mode` of
+  // `accept_and_defer`/`refuse_new`/`stopped`. Before item 12 this read the boolean alone, so it
+  // reported `false` (i.e. "sending normally") while the Control was halted by the newer dial — a
+  // field that says nothing is wrong during an outage. RETAINED and never removed (Rule 5); the
+  // boolean simply cannot name WHICH of the three paused rungs is pulled, and this campaign shape
+  // deliberately does not add the string (that is the operator surface's job — see
+  // `dispatch.dispatch_rung` in the health field table) — a tenant does not administer the
+  // module's rung.
+  "dispatch_paused": false,
 
   "totals": {
     "total": 5000,
@@ -438,14 +449,16 @@ failure additive-only versioning was meant to prevent.
 - **`error_codes[]`** — every code this module can emit with the HTTP status it maps to
   (`[{code, http_status}]`, sorted by status then code), **DERIVED by walking the same `codeStatus`
   map `writeError` resolves a status from**. It therefore cannot list a code the module cannot emit,
-  nor omit one it can. This surface emits **six** (`validation_failed`, `unauthenticated`,
-  `not_found`, `method_not_allowed`, `conflict`, `internal_error`) — a subset of the union table
-  above, which also carries
+  nor omit one it can. This surface emits **seven** (`validation_failed`, `unauthenticated`,
+  `not_found`, `method_not_allowed`, `conflict`, `internal_error`, `paused`) — a subset of the union
+  table above, which also carries
   `adminapi`'s `config_ordering_violation` and the reserved `forbidden`/`unprocessable`/
   `rate_limited`. *(This literal is not left to rot: `contract_drift` reads the number out of this
-  sentence and compares it to `codeStatus`, so a seventh code cannot ship without this line moving.
+  sentence and compares it to `codeStatus`, so an eighth code cannot ship without this line moving.
   The count moved five → six on 2026-08-04 when item 7b added `method_not_allowed`, and nothing
-  would have caught it staying at five.)* Module 3 emits **eight** at the same `/v1`; the two sets
+  would have caught it staying at five; it moved six → seven on 2026-08-05 when fix-plan item 12
+  added `paused` (the dispatch rung ladder, `send_managed_0025`), and the gate went red at the exact
+  moment the new code landed.)* Module 3 emits **nine** at the same `/v1`; the two sets
   differ legitimately (it has a batch endpoint and a rate-limited test button, so it adds
   `unprocessable` and `rate_limited`), and a client that can read both lists needs no
   per-module knowledge to handle either. The status is what makes the list actionable for a client

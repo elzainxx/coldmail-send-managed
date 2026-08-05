@@ -99,7 +99,7 @@ func TestRunnerLifecycle(t *testing.T) {
 	// the migration chain — it grows as later phases add 0015+.
 	wantChain := []string{"0000", "0001", "0002", "0003", "0004", "0005", "0006", "0007",
 		"0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019",
-		"0020", "0021", "0022", "0023", "0024"}
+		"0020", "0021", "0022", "0023", "0024", "0025"}
 
 	// --- Apply ---
 	if err := r.Up(ctx); err != nil {
@@ -131,10 +131,14 @@ func TestRunnerLifecycle(t *testing.T) {
 	// migration-filename deviation, Docs/history/open-decisions.md P8-OD-1; amended 2026-07-26 from 14 to 17,
 	// P8-OD-1 RULED-WIDEN) + Phase 9.5's 11 (send_managed_0021: B1-B5 operability controls + S10/S11
 	// completeness dials) + G11-OD-1's 1 (send_managed_0023: brain_singleton_reacquire_interval_sec) = 54.
-	// Phase 4 added NO config key (§0); Phase 7, Phase 9.5 and send_managed_0023 are fully schema-neutral
-	// (config seeds only, no table).
-	if n := configKeyCount(t, admin); n != 54 {
-		t.Fatalf("after Up: send_managed.config has %d keys, want 54 (14 foundation + 3 Phase 5 + 2 Phase 6 + 6 Phase 7 + 17 Phase 8 + 11 Phase 9.5 + 1 send_managed_0023)", n)
+	// PLUS ONE at send_managed_0025 (dispatch_mode, fix-plan item 12 — the graduated dispatch kill-switch
+	// ladder; the first key added outside a numbered phase, and notably NOT paired with a drop of
+	// dispatch_enabled: ADR-0013 records why the boolean is composed as a severity FLOOR instead of
+	// removed, since it has many live consumers) = 55.
+	// Phase 4 added NO config key (§0); Phase 7, Phase 9.5, send_managed_0023 and send_managed_0025 are
+	// fully schema-neutral (config seeds only, no table).
+	if n := configKeyCount(t, admin); n != 55 {
+		t.Fatalf("after Up: send_managed.config has %d keys, want 55 (14 foundation + 3 Phase 5 + 2 Phase 6 + 6 Phase 7 + 17 Phase 8 + 11 Phase 9.5 + 1 send_managed_0023 + 1 send_managed_0025)", n)
 	}
 	// Phase 8 Chunk 5's seventeen content-variation config seeds — anti-vacuity that they landed
 	// (amended from fourteen, P8-OD-1 RULED-WIDEN: css_magnitude_px/zero_width_rate/user_agent_rate).
@@ -220,6 +224,27 @@ func TestRunnerLifecycle(t *testing.T) {
 	if !jobEventsContentUpdateRejected(t, admin) {
 		t.Fatal("after Up: a CONTENT update on send_managed.job_events (actor -> 'admin') was PERMITTED — send_managed_0024's carve-out is too wide, or the append-only trigger is gone entirely; the audit log is mutable")
 	}
+	// send_managed_0025's one seed (fix-plan item 12, the graduated dispatch kill-switch ladder). A pure
+	// INSERT into config leaves no schema object behind, so the row itself is the only observable
+	// evidence the migration ran — and the evidence here is PRESENCE plus the seeded VALUE. The value
+	// matters more than the key's existence: seeding any rung other than `serving` would ship a system
+	// that starts up halted, and seeding a value outside the four-rung enum would make the Control
+	// degrade to accept_and_defer on its first tick forever. Both failures are silent (no error, mail
+	// simply does not move), which is exactly the class this test exists to catch. Both value and
+	// default_value are pinned: an operator PUT moves `value`, and `default_value` is what a future
+	// reseed or a config-reference cross-check reads, so a migration that seeded only one of them
+	// correctly would leave the other as the lie.
+	if val, def := configValueAndDefault(t, admin, "dispatch_mode"); val != `{"v": "serving"}` || def != `{"v": "serving"}` {
+		t.Fatalf("after Up: dispatch_mode value=%s default_value=%s, want both {\"v\": \"serving\"} (send_managed_0025 either did not run or seeded a rung that starts the system halted)", val, def)
+	}
+	// ...and the companion that 0025 did NOT drop dispatch_enabled. ADR-0013 records why: the boolean has
+	// many live consumers (the dispatch loop, the health snapshot, the campaign report), so it is
+	// RETAINED and composed as a severity floor of accept_and_defer rather than replaced. A future edit
+	// that "tidies up" the superseded-looking boolean would break Rule 5 and every existing runbook step
+	// that names it; it fails here.
+	if !configKeyExists(t, admin, "dispatch_enabled") {
+		t.Fatal("after Up: send_managed.config has lost dispatch_enabled — 0025 adds the rung ladder and must RETAIN the boolean (Rule 5; ADR-0013: it is composed as a floor, not replaced, because it has live consumers)")
+	}
 	// FORCE RLS is set on the crown-jewel credential table.
 	if !accountsForceRLS(t, admin) {
 		t.Fatal("after Up: send_managed.accounts does not have FORCE ROW LEVEL SECURITY")
@@ -276,6 +301,24 @@ func TestRunnerLifecycle(t *testing.T) {
 		// assertion is what proves the down is real rather than a version-row deletion.
 		if v == "0024" && jobEventsCarveoutActive(t, admin) {
 			t.Fatal("after Down 0024: an account_id -> NULL update on send_managed.job_events is STILL permitted (down did not restore send_managed_0008's unconditional reject-trigger)")
+		}
+		// The paired half of 0025's up-assertion. A seed migration reverses by DELETing its row, and
+		// nothing else about it is observable, so without this a 0025 down that only removed its own
+		// schema_migrations entry would pass every other check in this loop — leaving a key in the live
+		// config table that the manifest (post-revert) no longer lists, which is precisely the state
+		// config_drift exists to catch and would then catch on a clean restore instead of here.
+		//
+		// The over-delete half matters too, and for a sharper reason than usual: dispatch_enabled sits
+		// right next to this row conceptually, is the thing 0025 supersedes in spirit, and is EXACTLY
+		// what an over-broad down file would sweep up ("remove the dispatch switches this migration
+		// introduced"). Deleting it would leave a system with no kill-switch at all after a revert.
+		if v == "0025" {
+			if configKeyExists(t, admin, "dispatch_mode") {
+				t.Fatal("after Down 0025: send_managed.config still has dispatch_mode (down did not delete its seeded row)")
+			}
+			if !configKeyExists(t, admin, "dispatch_enabled") {
+				t.Fatal("after Down 0025: dispatch_enabled is GONE — 0025's down must remove exactly its own row; sweeping up the retained boolean leaves a reverted system with no dispatch kill-switch at all")
+			}
 		}
 	}
 	// After reversing 0001..0012 the schema is still present (owned by the bootstrap) with

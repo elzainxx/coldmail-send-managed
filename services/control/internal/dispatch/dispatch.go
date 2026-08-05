@@ -70,10 +70,16 @@ type Dispatcher struct {
 	// state, so a sustained misconfiguration never floods the log (spec §4.3, test T10 assertion 5).
 	// lastDispatchPausedLog is the Phase 9.5 B1 analogue for dispatch_enabled=false (§1.2).
 	// lastNotLeaderLog is the same throttle for the G11-OD-1 / ADR-0011 leadership gate below.
+	// lastReclaimFrozenLog is the item-12 diagnostic for the `stopped` rung's frozen reclaim sweep.
+	// It gets its OWN timestamp rather than sharing lastDispatchPausedLog: the two lines report
+	// different facts about different loops on different intervals, and sharing one throttle would let
+	// a chatty dispatch tick suppress the reclaim line for a minute — hiding, during an incident, the
+	// single most surprising consequence of the deepest rung.
 	diagMu                         sync.Mutex
 	lastSharedPoolNotConfiguredLog time.Time
 	lastDispatchPausedLog          time.Time
 	lastNotLeaderLog               time.Time
+	lastReclaimFrozenLog           time.Time
 
 	// leader is the G11-OD-1 / ADR-0011 (option B, ruled 2026-07-29) LEADERSHIP gate: "do I still
 	// hold the singleton advisory lock?". Wired from main.go to singleton.Guard.Healthy. While it
@@ -168,14 +174,47 @@ func (d *Dispatcher) logSharedPoolNotConfigured() {
 // logDispatchPausedByOperator emits the Phase 9.5 B1 internal diagnostic (§1.2), throttled to at
 // most once per dispatchPausedLogInterval across the whole process — a sustained operator pause
 // produces one log line per interval, never a flood, regardless of how many ticks elapse.
-func (d *Dispatcher) logDispatchPausedByOperator() {
+//
+// IT NAMES THE RUNG (fix-plan item 12). Since send_managed_0025 there are three rungs at which
+// claiming stops, and they differ in what ELSE is still running. A line that said only
+// "dispatch_enabled=false" would be actively misleading at refuse_new (where intake is also refused)
+// and at stopped (where the reclaim sweep is frozen too) — an operator reading it during an incident
+// would conclude the system was in a state it is not. M1's D2 damage was exactly this: everything
+// looked normal while the config was ignored, so echoing a stale framing proves nothing. The rung is
+// therefore derived from the cfg the gate read, and the line reports which lever produced it — the
+// mode, the legacy boolean floor, or both.
+func (d *Dispatcher) logDispatchPausedByOperator(cfg Config) {
 	d.diagMu.Lock()
 	defer d.diagMu.Unlock()
 	if time.Since(d.lastDispatchPausedLog) < dispatchPausedLogInterval {
 		return
 	}
 	d.lastDispatchPausedLog = time.Now()
-	log.Printf("dispatch: dispatch_paused_by_operator — dispatch_enabled=false; this tick claimed/routed/pushed nothing, queued jobs are untouched, reclaim/outcome/heartbeat continue (§1.2)")
+	rung := cfg.EffectiveRung()
+	switch rung {
+	case RungStopped:
+		log.Printf("dispatch: dispatch_paused_by_operator — rung=%s (dispatch_mode=%q dispatch_enabled=%t); this tick claimed/routed/pushed nothing, queued jobs are untouched, POST /v1/run is REFUSED 503 paused, and the RECLAIM SWEEP IS FROZEN (an expired lease is left in place until this rung is released); outcome ingestion and heartbeats continue (§1.2, fix-plan item 12)", rung, cfg.DispatchMode, cfg.DispatchEnabled)
+	case RungRefuseNew:
+		log.Printf("dispatch: dispatch_paused_by_operator — rung=%s (dispatch_mode=%q dispatch_enabled=%t); this tick claimed/routed/pushed nothing, queued jobs are untouched, POST /v1/run is REFUSED 503 paused; reclaim/outcome/heartbeat continue (§1.2, fix-plan item 12)", rung, cfg.DispatchMode, cfg.DispatchEnabled)
+	default:
+		// accept_and_defer — reachable from dispatch_mode, from dispatch_enabled=false (the severity
+		// floor), or from an unrecognized mode. Naming both dials is what tells an operator who pulled
+		// only one of them why they are here.
+		log.Printf("dispatch: dispatch_paused_by_operator — rung=%s (dispatch_mode=%q dispatch_enabled=%t); this tick claimed/routed/pushed nothing, queued jobs are untouched, POST /v1/run still ACCEPTS and queues, reclaim/outcome/heartbeat continue (§1.2)", rung, cfg.DispatchMode, cfg.DispatchEnabled)
+	}
+}
+
+// logReclaimFrozenByOperator emits the item-12 diagnostic for the `stopped` rung, throttled on its
+// own timestamp (see lastReclaimFrozenLog). Separate from the dispatch line because it reports a
+// separate fact: not "nothing was claimed" but "an expired lease was deliberately left in place."
+func (d *Dispatcher) logReclaimFrozenByOperator(cfg Config) {
+	d.diagMu.Lock()
+	defer d.diagMu.Unlock()
+	if time.Since(d.lastReclaimFrozenLog) < dispatchPausedLogInterval {
+		return
+	}
+	d.lastReclaimFrozenLog = time.Now()
+	log.Printf("reclaim: reclaim_frozen_by_operator — rung=%s (dispatch_mode=%q); this tick reclaimed nothing and wrote nothing: an expired lease or dead worker is left exactly as it is until the rung is released. Nothing is stranded (both detectors are DB-predicate reads, so they re-fire on the first tick after release) and nothing is lost. Release with dispatch_mode=refuse_new or lower to resume the sweep (fix-plan item 12)", cfg.EffectiveRung(), cfg.DispatchMode)
 }
 
 // claimQuery is the LOCKED Phase 1 claim CTE (§5.1), LIMIT 1 in Phase 3. FOR UPDATE SKIP LOCKED
@@ -241,12 +280,14 @@ func (d *Dispatcher) TryDispatch(ctx context.Context) (string, error) {
 	if d.draining.Load() {
 		return "", nil
 	}
-	// Phase 9.5 B1 (§1.2): the same panic switch Tick honors. TryDispatch is no longer wired into
-	// main.go's live loop (the Runner drives Tick), but it remains a public claim path any future
-	// caller could invoke directly, so it honors dispatch_enabled too rather than relying on callers
-	// to remember the gate — consistent with the drain check just above it.
-	if !cfg.DispatchEnabled {
-		d.logDispatchPausedByOperator()
+	// Phase 9.5 B1 (§1.2), GRADUATED by fix-plan item 12: the same kill-switch Tick honors.
+	// TryDispatch is no longer wired into main.go's live loop (the Runner drives Tick), but it remains
+	// a public claim path any future caller could invoke directly, so it honors the rung too rather
+	// than relying on callers to remember the gate — consistent with the drain check just above it.
+	// ClaimsAllowed() composes both dials; reading cfg.DispatchEnabled here would honour only half the
+	// control, and this is exactly the second claim path where that half-gating would go unnoticed.
+	if !cfg.ClaimsAllowed() {
+		d.logDispatchPausedByOperator(cfg)
 		return "", nil
 	}
 

@@ -155,6 +155,27 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := dbCtx(r.Context())
 	defer cancel()
 
+	// Fix-plan item 12: the INTAKE rung. At `refuse_new` and `stopped` this module declines new work
+	// with 503 `paused` rather than queueing a backlog it has been told not to work through. At
+	// `serving` and `accept_and_defer` intake is unaffected — accept_and_defer's entire purpose is that
+	// callers keep submitting while nothing is dispatched.
+	//
+	// PLACED HERE, AFTER VALIDATION AND BEFORE createJob, for two reasons. Before validation, a
+	// malformed request would get 503 instead of 400 and a caller debugging its own bug would be told
+	// the wrong thing. After createJob, the job would already exist and the refusal would be a lie.
+	//
+	// A READ FAILURE FAILS OPEN, DELIBERATELY, and this is the one judgement call in the gate. If the
+	// config read errors we accept the job. The alternative — refuse on a transient blip — converts a
+	// one-second DB hiccup into refused customer work, and it does so in the direction that LOSES
+	// something: a refused submission may never be retried, whereas an accepted job just sits in
+	// `queued` and is dispatched (or not) according to whatever the rung turns out to be. Accepting is
+	// recoverable; refusing is not. The claim-path gates are the ones that must fail closed, and they
+	// do: dispatch.LoadConfig returns a hard error and that tick claims nothing.
+	if !s.intakeAllowed(ctx) {
+		s.fail(w, r, newErr(codePaused, "run_refused_dispatch_rung_refuse_new_or_stopped"))
+		return
+	}
+
 	// Create one send_managed.jobs row (state=queued, genesis event via the actor='system' GUC), reading
 	// the frozen recipient/subject/body/reply_to from public.job_items (SELECT-only, Phase 1),
 	// SCOPED to the calling tenant: the job_item must belong to req.UserID (else 404-style

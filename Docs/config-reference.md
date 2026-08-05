@@ -143,6 +143,29 @@ except `autoquarantine_mode`, whose default `shadow` is a deliberate launch-safe
 | `variation_zero_width_rate_pct` | `{"v":5}` | integer | send_managed_0021 | S11 — percent of word boundaries eligible for zero-width insertion (`variation_zero_width`). **RESERVED / NOT-YET-CONSUMED (P9.5-OD-3, RULED)** — a documented duplicate of the already-wired `variation_zero_width_rate` (P8-OD-1, fraction 0–1); that key remains the sole source of truth for this rate to avoid two competing dials driving the same worker behavior. Phase 9.5 §2.4. |
 | `variation_css_micro_params` | `{"v":{"delta_px":1,"skip_below_px":3}}` | json | send_managed_0021 | S11 — CSS micro-variation pixel delta + skip-below threshold (`variation_css_micro`). `skip_below_px` is worker-consumed via `push_job.variation` (P9.5-OD-3) — that sub-field is CONSUMED. `delta_px` is **RESERVED / NOT-YET-CONSUMED (P9.5-OD-3, RULED)** — a documented duplicate of the already-wired `variation_css_magnitude_px` (P8-OD-1), which remains the sole source of truth for the CSS magnitude. Phase 9.5 §2.4. |
 
+## Fix-plan item 12 state (+1 key, `send_managed_0025`) — the graduated dispatch ladder
+
+One key, seeded by the Pass-2 alignment sweep rather than by a numbered phase. Schema-neutral: no
+table, column, enum, constraint, or index is added or altered — one `send_managed.config` row.
+
+**`dispatch_enabled` is NOT replaced and NOT dropped.** The boolean has many live consumers (the
+dispatch loop, the health surface, the campaign report, disaster-recovery procedure), so dropping it
+would break Rule 5 and every runbook step that names it. Instead of becoming a second independent
+lever — which is how half a kill switch stays pulled — it composes as a severity **FLOOR** of
+`accept_and_defer`, which is exactly the behaviour it already had. Every operator who flipped that
+boolean before this key existed sees identical behaviour after it.
+
+| key | default_value | value_type | seeding migration | description |
+|-----|---------------|-----------|-------------------|-------------|
+| `dispatch_mode` | `{"v":"serving"}` | string | send_managed_0025 | Graduated dispatch kill-switch ladder: `serving\|accept_and_defer\|refuse_new\|stopped`, in increasing severity. `serving` = normal operation. `accept_and_defer` = `POST /v1/run` still accepts and queues, but nothing is claimed or pushed; reclaim, outcome ingestion and heartbeats continue. `refuse_new` = as `accept_and_defer`, and `POST /v1/run` is refused `503 paused` so no backlog accumulates; in-flight work still drains and is still reclaimed. `stopped` = as `refuse_new`, and the reclaim sweep is frozen too, so an expired lease is left in place rather than requeued — **nothing is stranded**: reclaim's predicate is a DB read, so the lease is still expired on the first tick after release. **Outcome ingestion is NEVER gated at any rung** — an outcome is the record of a mail that has already left, and discarding it would destroy evidence rather than prevent a send. Composes with `dispatch_enabled` as a MAXIMUM (see above), never as a second independent lever. An unrecognized value falls back to `accept_and_defer` at `level=error`: no mail leaves under an unreadable policy, and one typo does not freeze the reclaim sweep. Rejected at the admin PUT boundary too, so a typo is reported to the operator rather than silently halting mail at a rung they did not choose. Consumed by `internal/dispatch/rung.go` (claim/intake/reclaim predicates), `internal/platformapi/dispatch_rung.go` (the `/v1/run` intake gate), and `internal/adminapi/dispatch_rung.go` (the health surface's `dispatch_rung`). |
+
+**Which surfaces report it.** `GET /v1/admin/health`'s `dispatch.dispatch_rung` names the effective
+rung; `dispatch.dispatch_paused` is retained unchanged in meaning ("the effective rung is not
+`serving`") and now derives from BOTH dials rather than from `dispatch_enabled` alone. `GET /v1/report`'s
+`dispatch_paused` does the same. Before this key, a Control halted by anything other than that one
+boolean reported `dispatch_paused: false` to every polling UI — work visibly not moving with the
+dashboard insisting nothing was wrong.
+
 ## Both config-ordering invariants (enforced at BOTH the admin PUT boundary AND config-LOAD; CLAUDE.md Rule 1, Phase 7 §5.3 authoritative)
 
 **Enforced at two independent points (Phase 9 CLOSEOUT, P9-OD-2 RULED-AND-CLOSED, 2026-07-27):**

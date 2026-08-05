@@ -15,7 +15,17 @@ type healthResponse struct {
 	WindowSec   int    `json:"window_sec"`
 
 	Dispatch struct {
-		DispatchPaused  bool    `json:"dispatch_paused"`
+		// DispatchPaused stays, unchanged in meaning and never removed (Rule 5, additive-only): it is
+		// "the effective rung is not serving." Since send_managed_0025 it is derived from BOTH dials
+		// rather than from dispatch_enabled alone — see resolveRung. Every input that made it true
+		// before still makes it true; it simply stops reading `false` while the Control is stopped.
+		DispatchPaused bool `json:"dispatch_paused"`
+		// DispatchRung is ADDITIVE (fix-plan item 12) and is the field an operator actually needs:
+		// there are now three rungs at which dispatch_paused is true and they differ in what else is
+		// running (intake, the reclaim sweep). A boolean cannot express which one is pulled, and
+		// during an incident "paused" without "which pause" is the ambiguity that makes an operator
+		// distrust the dashboard. A client that ignores this field behaves exactly as before.
+		DispatchRung    string  `json:"dispatch_rung"`
 		TicksPerMin     float64 `json:"ticks_per_min"`
 		SendsLastWindow int     `json:"sends_last_window"`
 		SendRatePerMin  float64 `json:"send_rate_per_min"`
@@ -97,13 +107,22 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, newErr(codeInternalError, "health_dispatch_enabled_read_failed: "+err.Error()))
 		return
 	}
+	// dispatch_mode (send_managed_0025, fix-plan item 12) — read alongside dispatch_enabled because the
+	// snapshot reports the EFFECTIVE rung, which is a function of both. A read error fails the request
+	// like every other config read here: this endpoint's job is to state the system's condition, and a
+	// health surface that guesses one field is worse than one that admits it could not answer.
+	dispatchMode, err := readConfigString(ctx, s.db, "dispatch_mode")
+	if err != nil {
+		s.fail(w, r, newErr(codeInternalError, "health_dispatch_mode_read_failed: "+err.Error()))
+		return
+	}
 	autoquarantineMode, err := readConfigString(ctx, s.db, "autoquarantine_mode")
 	if err != nil {
 		s.fail(w, r, newErr(codeInternalError, "health_autoquarantine_mode_read_failed: "+err.Error()))
 		return
 	}
 
-	snap, err := buildHealthSnapshot(ctx, s.db, windowSec, dispatchEnabled, autoquarantineMode)
+	snap, err := buildHealthSnapshot(ctx, s.db, windowSec, resolveRung(dispatchMode, dispatchEnabled), autoquarantineMode)
 	if err != nil {
 		s.fail(w, r, newErr(codeInternalError, "health_snapshot_failed: "+err.Error()))
 		return
@@ -132,6 +151,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		WindowSec:   snap.WindowSec,
 	}
 	resp.Dispatch.DispatchPaused = snap.DispatchPaused
+	resp.Dispatch.DispatchRung = snap.DispatchRung
 	resp.Dispatch.TicksPerMin = snap.TicksPerMin
 	resp.Dispatch.SendsLastWindow = snap.SendsLastWindow
 	resp.Dispatch.SendRatePerMin = snap.SendRatePerMin

@@ -57,15 +57,21 @@ func (d *Dispatcher) Tick(ctx context.Context) (Config, int, error) {
 		return cfg, 0, nil
 	}
 
-	// Phase 9.5 B1 (§1.2): the global dispatch panic switch. Checked at the very top, before any
-	// claim/route/push — this tick performs NO claim, no route, no push, and writes NOTHING. Queued
-	// jobs stay exactly queued (no state change, no job_events row); the reclaim loop, the outcome
-	// handler, heartbeats, and config reads all continue independently (they are driven by their own
-	// loops/handlers, not gated here). The loop keeps ticking at its normal interval — it does not
-	// sleep-forever or exit — so it resumes the instant the key flips back to true. Throttled so a
-	// long pause produces one log line per interval, never a flood.
-	if !cfg.DispatchEnabled {
-		d.logDispatchPausedByOperator()
+	// Phase 9.5 B1 (§1.2), GRADUATED by fix-plan item 12: the dispatch kill-switch. Checked at the
+	// very top, before any claim/route/push — this tick performs NO claim, no route, no push, and
+	// writes NOTHING. Queued jobs stay exactly queued (no state change, no job_events row); the
+	// reclaim loop, the outcome handler, heartbeats, and config reads all continue independently (they
+	// are driven by their own loops/handlers, not gated here — and at `stopped` the reclaim loop gates
+	// itself, in its own tick, rather than being reached into from here). The loop keeps ticking at its
+	// normal interval — it does not sleep-forever or exit — so it resumes the instant the rung is
+	// raised. Throttled so a long pause produces one log line per interval, never a flood.
+	//
+	// ClaimsAllowed(), not `cfg.DispatchEnabled`: the boolean is now one of TWO dials and reading it
+	// directly here would honour only half the control. The predicate composes both (rung.go), and
+	// `dispatch_enabled=false` still resolves to accept_and_defer, so this gate's behaviour for that
+	// input is byte-for-byte what it was.
+	if !cfg.ClaimsAllowed() {
+		d.logDispatchPausedByOperator(cfg)
 		return cfg, 0, nil
 	}
 

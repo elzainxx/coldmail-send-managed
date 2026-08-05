@@ -78,3 +78,12 @@ variation_comment_intensity_rates
 variation_zero_width_rate_pct
 variation_css_micro_params
 brain_singleton_reacquire_interval_sec
+
+# Fix-plan item 12 — send_managed_0025 (+1 key: the graduated dispatch kill-switch ladder). This is
+# the first key added outside a numbered phase: it lands in the Pass-2 alignment sweep, whose subject is
+# closing gaps found across all three modules, not delivering a new phase. dispatch_enabled is NOT
+# dropped alongside it (the boolean has many live consumers — the dispatch loop, the health snapshot,
+# the campaign report) and is instead composed as a severity FLOOR of accept_and_defer, which is exactly
+# what it already did. Docs/config-reference.md carries the operator-facing description; ADR-0013
+# records the decision.
+dispatch_mode

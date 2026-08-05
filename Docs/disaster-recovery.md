@@ -166,8 +166,18 @@ risk, not a corruption risk — decide deliberately whether to hold dispatch aft
 
 ```bash
 # Before bringing the Control back up on restored data, if re-sends are unacceptable:
-#   set dispatch_enabled=false, bring the Control up, reconcile against provider-side records,
-#   then re-enable. Exact call: api-contract.md (PUT /v1/admin/config/{key}).
+#   set dispatch_mode=accept_and_defer, bring the Control up, reconcile against provider-side
+#   records, then set it back to serving. Exact call: api-contract.md (PUT /v1/admin/config/{key}).
+#
+#   Set it in the RESTORED DATABASE before starting the Control, not through the API afterwards —
+#   the API needs a running Control, and by the time it answers, the first dispatch tick has
+#   already claimed. This is a jsonb value, so write the envelope, not a bare string:
+#     UPDATE send_managed.config SET value = '{"v":"accept_and_defer"}' WHERE key = 'dispatch_mode';
+#
+#   accept_and_defer, not refuse_new: reconciliation is about jobs already in the restored data,
+#   and refusing new submissions adds a platform-visible 503 outage on top of the recovery. Use
+#   `stopped` only if you want the reclaim sweep off too — for instance while you are hand-editing
+#   job rows during reconciliation and need nothing at all to move underneath you.
 ```
 
 ### Restore procedure
@@ -257,9 +267,15 @@ Safe ordering — the sequence that never leaves a row unreadable while dispatch
 1. **Prepare.** Generate the new key (32 random bytes) and choose the next label:
    `cred-dek-v1` → `cred-dek-v2`. Back the new key up **before** using it (§1) — a key you rotate to
    and then lose is the §1 disaster with extra steps. Collect every account's plaintext password.
-2. **Announce a send freeze.** Set `dispatch_enabled=false`. It halts dispatch cleanly with zero job
-   loss and is resumable; queued jobs wait. Confirm `dispatch.dispatch_paused: true` on the health
-   endpoint before continuing.
+2. **Announce a send freeze.** Set `dispatch_mode=accept_and_defer` (a `PUT` to
+   `/v1/admin/config/dispatch_mode`). It halts sending cleanly with zero job loss, is resumable, and
+   deliberately keeps `POST /v1/run` accepting — a key rotation is not a reason to start losing the
+   platform's submissions. Queued jobs wait. Confirm `dispatch.dispatch_rung: "accept_and_defer"` on
+   the health endpoint before continuing; do not settle for `dispatch_paused: true`, which is also
+   true at the two deeper rungs and cannot tell you which one you are at. (`dispatch_enabled=false`
+   still works and lands you at the same rung — it is the older dial and is retained. Use whichever,
+   but verify with `dispatch_rung`, because pulling one while the other is already down is how half a
+   halt goes unnoticed.)
 3. **Cut the key over.** Install the new key file, set `CREDENTIAL_KEY_ID` to the new label, restart
    the Control. Every existing row is now labelled with the *old* key and is unreadable — this is
    precisely why step 2 came first. Do not skip it and do not reorder these two.
@@ -333,9 +349,11 @@ Not a drill — the case where you believe the master key or a backup copy leake
    incident before it is a this-system incident.
 2. **Stop the bleeding at the providers**, not here. Change the SMTP passwords at each provider. That
    invalidates the leaked plaintext regardless of what happens to the key.
-3. `dispatch_enabled=false` while credentials are stale, so the system is not hammering providers
-   with passwords that no longer work (which would otherwise drive `auth_failure` quarantines
-   across the pool).
+3. `dispatch_mode=accept_and_defer` while credentials are stale, so the system is not hammering
+   providers with passwords that no longer work (which would otherwise drive `auth_failure`
+   quarantines across the pool). Keep intake open — `accept_and_defer`, not `refuse_new`; the
+   incident is on the sending side, and refusing submissions adds a second outage to the first.
+   Verify with `dispatch.dispatch_rung`.
 4. Rotate the master key and re-enter the new passwords in one pass — §3's procedure does both,
    since re-entry is required either way.
 5. Review who could reach the backups (§1's table), and treat the audit trail as evidence:
@@ -357,8 +375,11 @@ harvesting a new credential per job while your ticket says "worker evicted".
 1. **Cut the worker off the network, or kill the host.** Firewall its route to the Control's `:8444`, or
    stop the instance. This is the step that actually ends credential flow. The stream is the worker's own
    outbound connection, so nothing the Control does terminates it.
-   - If you cannot reach the host, `dispatch_enabled=false` is the blunt Control-side stop — it halts
-     dispatch to *every* worker, which is the right trade for a few minutes.
+   - If you cannot reach the host, `dispatch_mode=accept_and_defer` is the blunt Control-side stop —
+     it halts dispatch to *every* worker, which is the right trade for a few minutes. Do **not** use
+     `stopped` here: it also stops the reclaim sweep, so the jobs already leased to the compromised
+     worker would sit in `assigned`/`sending` instead of being reclaimed and re-dispatched to a
+     healthy one once you have evicted it.
 2. **Then revoke:** clear/rotate `send_managed.boxes.token_hash` and set `status='disabled'`, so it is
    refused if it ever reconnects.
 3. **Rotate the SMTP passwords of every account that dispatched to that worker** while it may have been

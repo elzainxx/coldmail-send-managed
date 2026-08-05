@@ -175,6 +175,21 @@ func validateConfigValue(key, valueType string, value json.RawMessage) *apiError
 		if perr := validateRateFraction(key, value); perr != nil {
 			return perr
 		}
+	case "dispatch_mode":
+		// Fix-plan item 12 (send_managed_0025): the graduated dispatch ladder. Same posture as
+		// autoquarantine_mode directly below — the Control-side loader ALSO fails safe on an
+		// unrecognized value (rung.go's resolveRung degrades to accept_and_defer), and this write-time
+		// check is the operator-feedback layer so a typo is rejected loudly here rather than silently
+		// landing somewhere the operator did not choose.
+		//
+		// That matters more for this key than for any other enum on this surface: the two dispositions
+		// of a typo'd value differ in what STOPS. An operator who meant `serving` and typed `srving`
+		// would, without this check, have their mail halted at accept_and_defer — the safe rung, but
+		// emphatically not the one they asked for. Rejecting the write means they find out in the
+		// response to their own PUT instead of in a support ticket.
+		if perr := validateEnumString(key, value, "serving", "accept_and_defer", "refuse_new", "stopped"); perr != nil {
+			return perr
+		}
 	case "autoquarantine_mode":
 		// Phase 9.5 B2 §2.1: the three-way shadow ladder. The Control-side seam (account_effect.go)
 		// ALSO degrades an unrecognized value to "shadow" defensively — this write-time check is the

@@ -244,9 +244,25 @@ func (s *Server) campaignItems(ctx context.Context, campaignID, userID string, c
 	return items, nextCursor, nil
 }
 
-// readDispatchPaused reads the LIVE dispatch_enabled config (B1) and reports its negation —
-// "dispatch_paused" (§2.2) is the operator-visible framing a UI renders; the underlying dial's
-// name/semantics are unchanged (CLAUDE.md Rule 1 — no shadow constant, this is a fresh read).
+// readDispatchPaused reports whether dispatch is paused — "dispatch_paused" (§2.2) is the
+// operator-visible framing a UI renders on the campaign report.
+//
+// IT READS BOTH DIALS SINCE send_managed_0025 (fix-plan item 12), and that is a BUG FIX, not a
+// widening. This function used to negate dispatch_enabled alone. Once dispatch_mode exists, an
+// operator who pulls `refuse_new` or `stopped` while the boolean is still true has stopped dispatch
+// completely — and the old reading would have reported `dispatch_paused: false` to every UI polling a
+// campaign, while not one job moved. That is precisely M1's D2 defect (a config read that looked
+// normal while the system ignored it), and it would have been introduced HERE by adding the ladder
+// without touching this reader. Adding a dial without revisiting what reports on it is how the
+// inert-control bug gets in.
+//
+// So the answer is "is the effective rung anything other than serving" — the same composition
+// dispatch.resolveRung performs, which by construction still returns true for every case the old
+// reading returned true for (dispatch_enabled=false floors at accept_and_defer, which is paused).
+// No existing client's interpretation changes; the field simply stops being wrong in the new cases.
+//
+// A read failure still propagates (the caller 500s the report) rather than guessing: a UI rendering
+// "not paused" from a failed read is the same lie in a smaller font.
 func (s *Server) readDispatchPaused(ctx context.Context) (bool, error) {
 	var raw []byte
 	if err := s.db.QueryRow(ctx, `SELECT value FROM send_managed.config WHERE key = 'dispatch_enabled'`).Scan(&raw); err != nil {
@@ -258,7 +274,21 @@ func (s *Server) readDispatchPaused(ctx context.Context) (bool, error) {
 	if err := json.Unmarshal(raw, &wrap); err != nil || wrap.V == nil {
 		return false, nil
 	}
-	return !*wrap.V, nil
+	if !*wrap.V {
+		return true, nil // the legacy floor: dispatch_enabled=false is at least accept_and_defer
+	}
+	mode, ok := s.readDispatchModeRaw(ctx)
+	if !ok {
+		// Unreadable/absent mode with the boolean true: report not-paused, matching the pre-0025
+		// answer for exactly this input. An unrecognized VALUE is different and is handled below.
+		return false, nil
+	}
+	if _, known := rungSeverity[mode]; !known {
+		// Garbage value: the Control resolves it to accept_and_defer, which IS paused. Reporting
+		// not-paused here would tell a UI that work is flowing while the Control claims nothing.
+		return true, nil
+	}
+	return mode != rungServing, nil
 }
 
 // readConfigStringLocal/readConfigIntLocal are minimal local send_managed.config readers (mirroring

@@ -101,8 +101,23 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
 ## 7. Autonomous-subsystem safety controls are respected
 - Every autonomous subsystem obeys its kill-switch / mode dial. These are honored by
   every current and future phase; no subsystem is "always on":
-    - dispatch_enabled            (panic switch; default true) — halt dispatch cleanly,
-                                    zero job loss, resumable.
+    - dispatch_mode               (serving | accept_and_defer | refuse_new | stopped;
+                                    default serving) — the graduated panic switch. Each
+                                    rung stops strictly more than the one above:
+                                    accept_and_defer stops sending but keeps intake and
+                                    the reclaim sweep; refuse_new also answers
+                                    POST /v1/run with 503 paused; stopped also stops
+                                    reclaim. Halt cleanly, zero job loss, resumable.
+                                    Unrecognized/unreadable resolves to accept_and_defer,
+                                    never to serving and never to stopped.
+    - dispatch_enabled            (panic switch; default true) — RETAINED (Rule 5) and
+                                    still honored: composed as a severity FLOOR of
+                                    accept_and_defer, not a second independent lever.
+                                    false alone still halts dispatch cleanly, zero job
+                                    loss, resumable. NOT dropped in favour of
+                                    dispatch_mode — it has many live consumers, so
+                                    removing it would be a breaking change for no gain
+                                    (ADR-0013).
     - autoquarantine_mode         (off | shadow | enforce; default shadow) — shadow
                                     logs the action it WOULD take before any phase makes
                                     it act; default is never enforce.

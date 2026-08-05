@@ -94,7 +94,8 @@ type Config struct {
 
 	// Phase 9.5 operability & control-plane safety dials (all eleven seeded send_managed_0021;
 	// config-not-code, §6). B1-B5 controls + the S10/S11 completeness dials.
-	DispatchEnabled                   bool           // dispatch_enabled — B1 global panic switch (§1.1)
+	DispatchEnabled                   bool           // dispatch_enabled — B1 global panic switch (§1.1); a severity FLOOR of accept_and_defer, see rung.go
+	DispatchMode                      string         // dispatch_mode — the graduated rung ladder, send_managed_0025 (fix-plan item 12); read through EffectiveRung(), never directly by a gate
 	AutoquarantineMode                string         // autoquarantine_mode — B2 shadow ladder off|shadow|enforce (§2.1)
 	AutopauseEnabled                  bool           // autopause_enabled — B2 kill-switch (§2.2)
 	VariationEnabled                  bool           // variation_enabled — B2 master kill-switch (§2.3)
@@ -317,6 +318,15 @@ func LoadConfig(ctx context.Context, db *pgxpool.Pool) (Config, error) {
 	// error like every other dial above — the migration seeds them, so an absent row means a
 	// pre-send_managed_0021 schema, not a legitimate operator override.
 	if c.DispatchEnabled, err = readBoolKey(ctx, db, "dispatch_enabled"); err != nil {
+		return c, err
+	}
+	// dispatch_mode (send_managed_0025, fix-plan item 12). A HARD error when the row is absent, like
+	// every other dial: the migration seeds it, so a missing row means a pre-0025 schema. It is NOT
+	// defaulted to serving here — a Control that boots and silently sends mail because it could not
+	// read the kill-switch is the failure this ladder exists to remove. An unrecognized VALUE is a
+	// different case and does fail safe, in resolveRung (rung.go), because at that point the row was
+	// read successfully and the safe answer is knowable.
+	if c.DispatchMode, err = readStringKey(ctx, db, "dispatch_mode"); err != nil {
 		return c, err
 	}
 	if c.AutoquarantineMode, err = readStringKey(ctx, db, "autoquarantine_mode"); err != nil {

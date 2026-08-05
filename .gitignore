@@ -20,6 +20,12 @@ deploy/certs/
 /tools/provision-worker/bin/
 **/bin/send-managed-migrate
 **/bin/provision-worker
+# A bare `go build ./...` inside a main package's own directory drops the binary THERE, not under
+# bin/ — so the patterns above do not catch it and `git add -A` will happily stage a 15MB artifact
+# (caught during fix-plan item 12 by the artifact turning up in `git status`). Named explicitly
+# rather than as a blanket rule, so a real file that happens to share a tool's name is not hidden.
+/tools/send-managed-migrate/send-managed-migrate
+/tools/provision-worker/provision-worker
 *.exe
 *.out
 *.test

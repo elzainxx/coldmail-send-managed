@@ -70,8 +70,99 @@ type route struct {
 	handler http.HandlerFunc
 }
 
+// APIVersion is the frozen contract version of this module's platform surface. A breaking change
+// means a /v2 prefix, never an in-place edit of what /v1 means.
+//
+// FIX-PLAN ITEM 14, THE SENDERS' HALF (adopted from module 1). M1 asserts its declared version
+// against every response it writes — verdict.APIVersion, checked by Response.Valid(), which api.go
+// and orchestrator.go both call BEFORE the write, so a response whose version does not match the
+// module's declaration is never emitted. This module had the other half of item 14 (a contract_drift
+// gate over the route set) and NOT that one. The trade goes both ways: M1 got the route gate, the
+// senders get the version assertion.
+//
+// WHAT WAS ACTUALLY WRONG HERE, and it is not "no constant existed". handleDescribe published
+// `"api_version": "v1"` as a bare literal with NOTHING asserting it: no test in this module named
+// api_version, and the contract_drift gate — which does check describe's error_codes[] and its
+// vocabularies against their sources — did not check this field at all. Meanwhile every served path
+// carries its own hardcoded "/v1". So the version a client reads from describe and the version the
+// URLs actually speak were two unrelated strings that happened to agree, and either could be edited
+// without the other. A /v2 migration that renamed the routes and forgot describe would ship a
+// module telling callers it speaks v1 on paths that no longer exist.
+//
+// WHY IT IS DERIVED AND NOT DECLARED. Writing `const APIVersion = "v1"` beside the table would fix
+// the drift between describe and the constant while leaving the drift between the constant and the
+// PATHS — a third string to keep in step, and the one that matters least is the one a reviewer would
+// notice. Deriving it from the route table means the version cannot be wrong: it IS what the served
+// paths say. This is the same reasoning as M1's Route slice (the served set is the compiler's view)
+// and as deriving describe's error_codes[] from codeStatus rather than hand-listing them.
+//
+// WHAT ENFORCES THE ABOVE — TestAPIVersion_* in api_version_test.go, all five on every `go test`.
+// Named exactly, because "see the tests" is how a header ends up pointing at a test that no longer
+// exists (this project has hit that already):
+//   - TestAPIVersion_DerivationContract — apiVersionOf over 6 tables, including the two that yield "".
+//   - TestAPIVersion_WiringRefusesATableWithoutOneVersion — mustAPIVersion actually panics, for both
+//     bad inputs, and the message names the offending routes.
+//   - TestAPIVersion_ConstructionGoesThroughTheRefusal — the structural half: routes() registers only
+//     via wire(), and wire() refuses BEFORE registering. Break B94 (routes() inlining the loop) left
+//     every behavioural test green, so this one is a go/ast scan of server.go.
+//   - TestAPIVersion_RouteTableSpeaksOneVersion — the real table agrees and matches ^v[0-9]+$.
+//   - TestAPIVersion_DescribePublishesTheDerivedVersion — real HTTP, real clone: the served body's
+//     api_version equals APIVersion(), which a unit test could not catch (B88).
+func (s *Server) APIVersion() string { return apiVersionOf(s.platformRoutes()) }
+
+// mustAPIVersion is apiVersionOf plus the refusal, and it runs at CONSTRUCTION (register), not per
+// request.
+//
+// WHY IT MOVED HERE, which is worth recording because a break-verification found it. The guard was
+// originally `if apiVersion == "" { fail the request }` inside handleDescribe. Deleting that branch
+// outright left the entire suite GREEN (break B91): platformRoutes() is a hardcoded literal that
+// always agrees, so the branch was unreachable from any HTTP test and nothing could observe its
+// absence. Untested defensive code that no control can see is exactly the phantom this fix plan
+// exists to remove — a reviewer reads the branch and believes the case is handled.
+//
+// At construction the same property is (a) directly reachable by a test, since register takes the
+// table as an argument, and (b) strictly louder: a route table that cannot name one version is a
+// programming error in this file, so the module refuses to BOOT rather than serving three routes
+// fine and 500ing describe until someone calls it. Every non-test caller reaches this through
+// NewServer, so no Server that serves traffic can exist with an unnameable version — which is what
+// lets handleDescribe publish APIVersion() with no branch at all.
+func mustAPIVersion(rs []route) string {
+	v := apiVersionOf(rs)
+	if v == "" {
+		var got []string
+		for _, rt := range rs {
+			got = append(got, rt.method+" "+rt.pattern)
+		}
+		panic("platformapi: platformRoutes() does not name exactly one api_version — the table is " +
+			"empty or its routes disagree on a version prefix, so no truthful api_version can be " +
+			"published. Routes: [" + strings.Join(got, ", ") + "]")
+	}
+	return v
+}
+
+// apiVersionOf extracts the shared version prefix from a route table. It returns "" if the table is
+// empty or the routes disagree — a caller must treat that as a bug, not as a version, which is what
+// mustAPIVersion does at construction.
+func apiVersionOf(rs []route) string {
+	version := ""
+	for _, rt := range rs {
+		seg := strings.SplitN(strings.TrimPrefix(rt.pattern, "/"), "/", 2)[0]
+		if version == "" {
+			version = seg
+			continue
+		}
+		if seg != version {
+			return "" // routes disagree: two versions served from one table
+		}
+	}
+	return version
+}
+
 // platformRoutes is the four Phase-3 platform routes. Additive-only; the served set must match
 // Docs/api-contract.md (the contract_drift gate).
+//
+// The "/v1" in each pattern is what APIVersion() reads, so these strings are the single source of
+// this module's contract version — describe does not carry a second copy.
 func (s *Server) platformRoutes() []route {
 	return []route{
 		{"POST", "/v1/quote", s.handleQuote},

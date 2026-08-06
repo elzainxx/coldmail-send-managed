@@ -68,8 +68,26 @@ func (s *Server) Handler() http.Handler { return s.handler }
 // loop, so a route is structurally guaranteed to be (a) authenticated and (b) present in the shape
 // mux that decides 405-vs-404 — the same "one call site can register a route at all" discipline
 // adminapi's route table uses.
-func (s *Server) routes() {
-	rs := s.platformRoutes()
+func (s *Server) routes() { s.wire(s.platformRoutes()) }
+
+// wire is routes() with the table as a PARAMETER, and it exists in this shape for one reason: it is
+// the only way a test can hand this code a broken route table.
+//
+// routes() reads platformRoutes(), which is a hardcoded literal that always agrees on "/v1". So
+// every guard that only fires on a BAD table is unreachable through routes() — which is precisely
+// how break B91 slipped past: the api_version refusal lived inside handleDescribe, deleting it kept
+// the whole suite green, and no control existed that could have noticed. Taking the table as an
+// argument makes the refusal reachable (TestAPIVersion_WiringRefusesATableWithoutOneVersion calls
+// wire with a two-version table and requires the panic), so the guard has a control instead of a
+// comment. TestAPIVersion_ConstructionGoesThroughTheRefusal then holds that routes() still delegates
+// here rather than registering the mux itself — break B94 proved no behavioural test can see that.
+func (s *Server) wire(rs []route) {
+	// Refuse to CONSTRUCT a server whose route table cannot name one api_version (fix-plan item 14,
+	// senders' half). This runs before any registration, so a misconfigured table takes the process
+	// down at boot rather than serving quote/run/report normally while describe 500s — and it means
+	// handleDescribe can publish APIVersion() with no branch of its own, because no Server that can
+	// serve a request can exist with an unnameable version. See mustAPIVersion's header.
+	mustAPIVersion(rs)
 	for _, rt := range rs {
 		s.mux.HandleFunc(rt.method+" "+rt.pattern, s.requireAuth(rt.handler))
 	}

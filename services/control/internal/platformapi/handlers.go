@@ -309,9 +309,19 @@ func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, verr)
 		return
 	}
+	// fix-plan item 14, the senders' half: the version is DERIVED from the served route table (the
+	// strings a client's URLs must actually match), never written as a literal here.
+	//
+	// NO BRANCH IS NEEDED and that is deliberate, not an omission. An earlier draft failed the request
+	// when APIVersion() returned "" — the same shape describeVocabularies uses one call up. Break B91
+	// showed the branch was unreachable: platformRoutes() always agrees, so deleting the guard left the
+	// suite green and it protected nothing. The check now runs in wire() at construction, where a test
+	// CAN hand it a broken table, and it panics. So by the time any request reaches this line the
+	// version is guaranteed non-empty — the invariant is held one layer up instead of re-asserted here
+	// where nothing could ever prove it fires.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"module":      "send_managed",
-		"api_version": "v1",
+		"api_version": s.APIVersion(),
 		"capabilities": map[string]any{
 			"single_send":           true,
 			"sequences":             false,

@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/coldmail-send-managed/control/internal/dsnscrub"
 )
 
 // LockKey is the fixed, namespaced advisory-lock key for the Control singleton. Distinct from
@@ -87,7 +89,10 @@ func (g *Guard) SetReacquireInterval(d time.Duration) {
 func Acquire(ctx context.Context, dsn string, timeout time.Duration) (*Guard, error) {
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("singleton dedicated connect: %w", err)
+		// N1/D12: main.go logs this via log.Fatalf("FATAL singleton acquire: %v", err). This package is
+		// a SECOND producer of the same leak — it opens its own dedicated connection with its own copy
+		// of the DSN — which is why the scrub is a shared package rather than a helper in internal/db.
+		return nil, fmt.Errorf("singleton dedicated connect: %w", dsnscrub.Err(err, dsn))
 	}
 
 	deadline := time.Now().Add(timeout)
@@ -212,7 +217,10 @@ func (g *Guard) tryReacquire() {
 	if g.conn == nil {
 		conn, err := pgx.Connect(ctx, g.dsn)
 		if err != nil {
-			g.logReacquireFailure("dedicated reconnect failed: " + err.Error())
+			// N1/D12, AND THE WORST OF THE PATHS. This is not a boot-only log line: logReacquireFailure
+			// prints the 1st failure and then every 12th, for as long as the lock stays lost. An
+			// unscrubbed DSN here repeats into the Control's log for the whole duration of an outage.
+			g.logReacquireFailure("dedicated reconnect failed: " + dsnscrub.Err(err, g.dsn).Error())
 			return
 		}
 		g.conn = conn

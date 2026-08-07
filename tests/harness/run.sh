@@ -203,6 +203,14 @@ go_suite services/control/internal/httpapi "root-mux coded 404 + log-forgery neu
 go_suite services/control/internal/workerlink  "workerlink stream in-flight accounting (2 tests)"
 go_suite services/control/internal/workerproto "variation wire-format round-trip (1 test)"
 
+# N1/D12 — the DSN scrub. Needs NO database and no stack: every DSN in it is rejected at the pgx
+# PARSE stage (before a socket opens) or points at 127.0.0.1:1, so it is listed here with the other
+# substrate-free packages. Its load-bearing test is not the leak assertion but
+# TestDSNScrub_PgxStillLeaksAtThisPin, which re-measures on every run that the pinned pgx v5.7.4
+# genuinely leaks the credential — if a pgx bump fixes redaction upstream, or changes which trigger
+# carries the DSN, the premise fails loudly instead of the whole file going quietly vacuous.
+go_suite services/control/internal/dsnscrub    "DSN credential scrub (N1/D12: pgx echoes the whole connection string; 9 tests, no DB)"
+
 # --- Phase 2 admin API behavioral suite (real Server over httptest against real PG clones) -----
 # These tests live in the control module (internal/adminapi) and drive the ACTUAL admin handlers
 # against clones of a template migrated 0000..0014. Build a dedicated template so the clones have

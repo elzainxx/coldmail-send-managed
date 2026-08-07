@@ -1,7 +1,13 @@
 # Real-infra CI (Phase 0). Runs on every push/PR; a passing run is a REQUIRED status check
 # on the default branch. Brings up the SAME compose stack devs run (base + harness override),
-# executes the real-infra behavioral harness, then the three BLOCKING drift gates. Nothing is
+# executes the real-infra behavioral harness, then every BLOCKING structural gate. Nothing is
 # mocked — real Postgres + real Control + real worker + real Mailpit (CLAUDE.md Rule 3).
+#
+# NO COUNT IS WRITTEN HERE ON PURPOSE. This line used to say "the three BLOCKING drift gates" and was
+# still saying three when there were nine — a hand-maintained number that nothing verifies is the
+# STALE ASSERTION class, and it reads as coverage while being wrong. The authoritative count is
+# derived, not written: tests/harness/checks/test_enumeration.sh rule 2 fails unless every
+# checks/*.sh is named in a run: command in this file, and prints the live number when it passes.
 name: real-infra
 on: [push, pull_request]
 
@@ -77,6 +83,15 @@ jobs:
       - name: Security gate — no credential leak in service logs (BLOCKING)
         if: always()
         run: bash tests/harness/checks/no_secret_leak.sh
+
+      # N1/D12's WIRING control. internal/dsnscrub's nine tests prove the scrub works; they cannot
+      # prove it is CALLED. Measured: with the wrap removed from internal/db's call sites, the unit
+      # package stayed green and so did go build and go vet — nothing in the toolchain notices a
+      # leaking call site. This gate is the thing that notices. It needs no database or stack (it is
+      # static analysis over services/ and tools/), so it sits with the other structural gates.
+      - name: Security gate — every driver call site scrubs the DSN out of its error (BLOCKING)
+        if: always()
+        run: bash tests/harness/checks/dsn_scrub_wiring.sh
 
       - name: Diagnostics on failure
         if: failure()

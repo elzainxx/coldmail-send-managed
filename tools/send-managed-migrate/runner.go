@@ -46,7 +46,12 @@ func (r *Runner) connect(ctx context.Context) (*pgx.Conn, error) {
 	defer cancel()
 	c, err := pgx.Connect(cctx, r.DSN)
 	if err != nil {
-		return nil, fmt.Errorf("connect: %w", err)
+		// N1/D12: MEASURED at the pinned pgx v5.7.4 — a rejected connection string is echoed WHOLE
+		// into this error, and pgx's own redaction misses ?password=, ?sslpassword= and the honored
+		// spaced `password = SECRET`. Every caller of connect() returns the error up to main.go, which
+		// hands it to fatal(err.Error()) -> stderr. A migration run is exactly when that output gets
+		// pasted into a ticket. See dsnscrub.go for the measurement.
+		return nil, fmt.Errorf("connect: %w", scrubDSNError(err, r.DSN))
 	}
 	return c, nil
 }

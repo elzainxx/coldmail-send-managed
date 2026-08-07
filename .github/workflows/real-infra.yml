@@ -33,8 +33,57 @@ jobs:
       - name: Generate dev certs/secrets + provision dev worker (writes .env)
         run: bash scripts/dev.sh certs
 
-      - name: Bring up the stack (base + harness override; blocks on healthchecks)
-        run: bash scripts/dev.sh up
+      # `reset`, NOT `up`. The ORDER IS LOAD-BEARING and this step used to get it wrong:
+      # postgres -> migrate (send_managed.boxes must EXIST) -> seed the box token rows -> everything
+      # else. `up` alone skips the seed, and the worker's only depends_on is `control: healthy` — so
+      # on a cold runner with an empty volume the worker registers BEFORE its token_hash row exists,
+      # is rejected as unauthenticated, burns its retry budget, and EXITS. The worker has no restart
+      # policy (`restart:` is unset), so nothing brings it back: the stack sits there with a dead
+      # worker and `docker compose up --wait` still returns 0, because the worker has no healthcheck
+      # for --wait to block on.
+      #
+      # MEASURED 2026-08-07 on a genuine clean slate, same tree, same host, nothing but the ordering
+      # changed:
+      #   certs -> up    -> test    58 passed,  4 FAILED
+      #   certs -> reset -> test    62 passed,  0 failed   (worker healthy first start, RestartCount=0)
+      # All four failures were SUITE 3 and SUITE 5 `docker compose exec`-ing into a worker that was
+      # not running, or was mid-restart from a manual recovery: `exec` then yields EMPTY output, so
+      # the probes read '' instead of 200/401 and the cert read looked unreadable. They present as an
+      # mTLS bug and a volume-mount bug. They are neither.
+      #
+      # scripts/dev.sh's `reset` case has documented this since it was written — "seeding after `up`
+      # is too late, because the worker has already burned its retry budget and exited" — and this
+      # workflow called `up` anyway. A comment in one file is not a control over another; the reason
+      # CI is correct now is that it invokes the recipe that encodes the order, rather than
+      # re-implementing a subset of it.
+      - name: Bring up the stack in the seeded order (postgres -> migrate -> seed -> rest)
+        run: bash scripts/dev.sh reset
+
+      # ANTI-VACUITY for the step above, and it guards a real blind spot: `dev.sh up` returns 0 with a
+      # DEAD worker, because the worker has no healthcheck for `--wait` to block on. So "the stack came
+      # up" is not evidence a worker exists to test. This asserts the state the seeded order produces —
+      # running, and never having exited — BEFORE the harness runs, so a regression names its own cause
+      # instead of surfacing as four unrelated-looking mTLS/mount failures downstream.
+      #
+      # BREAK-VERIFIED 2026-08-07, both directions: on the seeded stack it prints
+      # `running=true RestartCount=0` and exits 0; after `down -v` + a bare `up` (the exact defect this
+      # replaces) it prints `running=false` and exits 1. Note which assertion fires — the worker does
+      # not restart-loop, it stays dead, which is why RestartCount alone would NOT have caught it.
+      - name: Worker came up seeded on the FIRST attempt (no register-reject exit)
+        run: |
+          rc="$(docker inspect -f '{{.RestartCount}}' coldmail-send-managed-worker-1)"
+          running="$(docker inspect -f '{{.State.Running}}' coldmail-send-managed-worker-1)"
+          echo "worker: running=$running RestartCount=$rc"
+          if [ "$running" != "true" ] || [ "$rc" != "0" ]; then
+            echo "FAIL: worker is not running cleanly (running=$running, RestartCount=$rc)."
+            echo "The usual cause is that it registered before send_managed.boxes carried its"
+            echo "token_hash — the seed ran late or not at all — so it was rejected as"
+            echo "unauthenticated and exited. It has no restart policy, so it stays dead, and"
+            echo "SUITE 3/5 then fail with EMPTY exec output that looks like an mTLS or a volume"
+            echo "bug. Check the ordering in scripts/dev.sh's reset case."
+            docker compose -f docker-compose.yml -f tests/harness/compose.test.yml logs worker | tail -20
+            exit 1
+          fi
 
       - name: Real-infra behavioral harness (10 checks, must be all-green)
         run: bash scripts/dev.sh test

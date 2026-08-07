@@ -20,6 +20,27 @@ ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 hr()   { echo "──────────────────────────────────────────────────────────────"; }
 
+# Build the migrate runner binary this script calls three times below. NOTHING BUILT IT before
+# 2026-08-07: bin/ is gitignored, so on a fresh checkout — which is every CI run — the path simply
+# did not exist, and each up-and-set-password call is `>/dev/null 2>&1`-guarded inside an `if`. So
+# TEST_TEMPLATE_DB ended up "" three times and every test gated on it t.Skip()ed.
+#
+# MEASURED here by moving bin/ aside, 2026-08-07: 269 of 359 declared tests degraded to skips —
+# 16 of 16 in the Phase 1 data model, 67 of 72 in adminapi, 141 of 168 in dispatch, 45 of 54 in
+# platformapi. `go test` exits 0 on an all-skip package and go_suite() judges by grepping for a FAIL
+# line, so on the pre-C4.1 harness that read as "58 passed, 0 failed" with the append-only, RLS,
+# credential-AAD and tenancy suites all unexecuted.
+#
+# It is red now, and that is C4.1's nonzero floor doing its job: the declared==ran check reports
+# "EXECUTED 0 OF 16 DECLARED TESTS" and prints "go test exited without a FAIL line, so this would
+# have been reported as PASSING". This build line is still the actual fix — the floor turns a silent
+# false green into a loud red, it does not make the tests run.
+#
+# Module 3's tests/harness/run.sh has carried this same build line, and a comment describing this
+# same failure, since M3-P0-OD-12. It was never ported here. Mirrors scripts/dev.sh's existing
+# inline build of tools/provision-worker/bin/provision-worker.
+( cd tools/send-managed-migrate && GOTOOLCHAIN=local go build -o bin/send-managed-migrate . )
+
 # --- Derive connection info from the running stack ---------------------------
 # Admin (superuser) DSN via the mapped host port 5432.
 SUPER="${POSTGRES_SUPERPASS:-devsuperpass}"

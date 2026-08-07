@@ -577,7 +577,32 @@ outstanding decisions blocking launch.**
 
 ## Pre-live gates (required before the first LIVE run; NOT before Phase 1 build)
 
-All consolidated in **`Docs/pre-live-gates.md`**. These are confirmed against the real shared
+> **PATH CORRECTION 2026-08-07 — the two `Docs/pre-live-gates.md` references in this file are STALE
+> and resolve to nothing.** The file now lives at
+> [`Docs/history/pre-live-gates.md`](pre-live-gates.md); it was moved into `history/` by the
+> documentation reorganisation and this frozen ledger's links were not updated with it. Cited at two
+> places: here, and in the `OD-1` row of the "Applied recommended disposition" table above. Every
+> *other* citation in the repo already uses the new path (`Docs/advisory-locks.md:35`,
+> `Docs/go-live-checklist.md:10`, `Docs/history/README.md:32`), which is why the break went unnoticed —
+> the majority were right.
+>
+> **Nothing is lost, and the operative tracking is elsewhere.** G1–G4 are all carried in the living
+> [`Docs/go-live-checklist.md`](../go-live-checklist.md) — §2 (G3/OD-8), §3 (G1, G2 / OD-1, OD-10),
+> §4 (G4/S15) — which that document names as the ordered form an operator actually works through, with
+> `history/pre-live-gates.md` retained for the reasoning. So this is a broken *link*, not a dropped
+> *gate*.
+>
+> **Annotated rather than edited, deliberately**, and for the same reason as the R2-5 ruling recorded in
+> `phase-9-polish-and-documentation.md`: this is a closed ledger, and CLAUDE.md forbids editing a locked
+> document as build work. **But note the honest cost of that rule here** — unlike R2-5, where the stale
+> thing was a hand-copied request body, this one is a *link*, and link integrity is exactly the kind of
+> thing a gate can check cheaply and mechanically. No gate in this repo does. A markdown link-checker
+> over `Docs/` would have caught it the day the file moved, and would catch the next move; that it does
+> not exist is why a reorganisation could silently break two references in a document nobody expects to
+> change. Registered as future work rather than built inside a closeout.
+
+All consolidated in **`Docs/pre-live-gates.md`** *(stale path — see the correction above;
+now `Docs/history/pre-live-gates.md`)*. These are confirmed against the real shared
 platform DB before the module first points at it — Phase 1 is implemented and proven in the
 harness without them.
 

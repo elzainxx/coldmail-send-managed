@@ -484,6 +484,26 @@ a UI team could build against this **without asking a question**. Two surfaces,
 
 ### 5.3 Platform-facing surface (per-tenant isolated; auth domain A)
 
+> **R2-5 RULED 2026-08-07 — the two `user_id` rows in the table below are STALE. Do not implement from
+> it; the authority is [`api-contract.md`](../api-contract.md).** This is a quick-reference table in a
+> CLOSED phase spec, and CLAUDE.md §8 forbids editing a locked spec as part of build work — so the
+> ruling is to **annotate, not rewrite**, and the rows stay exactly as written for the historical
+> record. What is stale, precisely:
+>
+> - **`POST /v1/run`** shows the body as `{"job_item_id": "uuid"}`. `user_id` is **also REQUIRED** (the
+>   owning tenant). Omitting it returns `400 validation_failed` / `user_id_required`
+>   (`internal/platformapi/handlers.go:144`), not a `202`.
+> - **`GET /v1/report`** shows the selector as `?job_id=` | `?job_item_id=` | `?campaign_id=`.
+>   **`?user_id=<uuid>` is a REQUIRED tenant selector in addition to one of those**, enforced at
+>   `handlers.go:219` with the same error.
+>
+> Both were verified against the code and against `api-contract.md` §"Platform-facing surface" on
+> 2026-08-07 — the living contract is correct on both routes, and it is the document `contract_drift`
+> actually verifies against, so no gate could have caught this table. That is the reason for the
+> annotation: a stale example inside a frozen doc is invisible to every automated check in the repo,
+> and the only remaining control is a reader's eye. **Second row noted:** the item as originally filed
+> named `run` only; `report` was found to have the same omission while ruling it.
+
 | Method · Route | Purpose | Request | Success response |
 |---|---|---|---|
 | `POST /v1/quote` | Cost preview (pure, no side effects, idempotent — §1) | `{ "recipient_count": <int> }` | `200 { recipient_count, cost, currency:"credits", unit_price_credits, tier }` |

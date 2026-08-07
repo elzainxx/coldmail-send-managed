@@ -111,7 +111,7 @@ is registered here.
 ## 6. Known defects, flagged not fixed
 
 Found during Phase 10's verification passes, plus one gap found later while walking
-[`coldmail-send-managed-local-test-guide.md`](./coldmail-send-managed-local-test-guide.md). Each is real and
+[`send-managed-local-test-guide.md`](./send-managed-local-test-guide.md). Each is real and
 reproduced; each fix is a **behavior change**, which is why none was made in a phase whose contract is
 that behavior does not change. Listed most-likely-to-be-hit first.
 
@@ -147,20 +147,78 @@ that behavior does not change. Listed most-likely-to-be-hit first.
 
 ---
 
-## 7. One genuinely open decision
+## 7. The open decision — RULED AND CLOSED 2026-08-07
 
-Every item in the ledger across phases 0–10 (including 9.5) is ruled and closed **except one**, which
-is left open because it is the user's call and not a build decision:
+Every item in the ledger across phases 0–10 (including 9.5) is ruled and closed. The last one, **R2-5**,
+was ruled on 2026-08-07 and is recorded here rather than deleted, because the *reasoning* is the part
+worth keeping.
 
-- **R2-5** — `Docs/history/phase-9-polish-and-documentation.md` §5.3's quick-reference table shows
-  `run`'s request body as `{job_item_id}`, omitting the required `user_id`. It is a **stale example in
-  a locked spec**. CLAUDE.md forbids editing a locked phase spec as part of build work, and the
-  authoritative living contract ([`api-contract.md`](./api-contract.md) — the document
-  `contract_drift` actually verifies against) is correct. Fixing it means spending a deliberate,
-  reviewed edit on a frozen document (CLAUDE.md §8). **Not a build blocker, not a contract gap, and
-  not something an operator or UI team would hit** — they read the living contract.
+- **R2-5 — stale `user_id` rows in a locked spec's quick-reference table. RULED: annotate, do not
+  rewrite.** `Docs/history/phase-9-polish-and-documentation.md` §5.3 shows `run`'s body as
+  `{job_item_id}`, omitting the REQUIRED `user_id`. Ruling: the row stays exactly as written (CLAUDE.md
+  §8 — a closed spec is a historical record, and rewriting it to match today's code destroys the
+  record of what was specified), and a **dated annotation** now sits above the table naming precisely
+  what is stale and pointing at [`api-contract.md`](./api-contract.md) as the authority.
+  - **A second stale row was found while ruling it.** `GET /v1/report`'s selector is shown as
+    `?job_id=` | `?job_item_id=` | `?campaign_id=`, but `?user_id=` is a REQUIRED tenant selector too.
+    The item as filed named `run` only. Both were verified against the code
+    (`internal/platformapi/handlers.go:144` and `:219` — each returns `400 validation_failed` /
+    `user_id_required`) and against the living contract, which is correct on both routes.
+  - **Why an annotation and not a gate.** `contract_drift` verifies the served routes against
+    `api-contract.md`; it does not read closed phase specs, and it should not — they are frozen by
+    design. So a stale example inside one is invisible to every automated check in this repo, and no
+    mechanism can be added that would catch the next one without unfreezing the specs. That makes this
+    the rare case where the honest control is a **reader-facing warning at the point of use** rather
+    than a test. Stated plainly so it is not mistaken for the usual "a comment is not a control": here
+    there is no mechanism available, and the annotation is placed where someone about to implement from
+    the wrong table will read it.
+  - Not a build blocker and not a contract gap: an operator or UI team reads the living contract.
 
 Full ledger with every ruling: [`Docs/history/open-decisions.md`](./history/open-decisions.md).
+
+---
+
+## 7a. A markdown link-integrity gate over `Docs/` (registered 2026-08-07)
+
+**Registered after MEASURING the current state, not supposing it.** A one-off walk of every relative
+markdown link under `Docs/` in all three repos on 2026-08-07: **`coldmail-send-managed` 228 local links
+/ 2 broken · `coldmail-send-byo` 263 / 2 · `coldmail-verify` 485 / 0.**
+
+**What the two broken ones in this repo were.** Rename fallout. `Docs/README.md:19` and
+`Docs/future-work.md:114` both pointed at `coldmail-send-managed-local-test-guide.md` — the prose was
+updated to the new repo prefix while the file kept its shorter name,
+[`send-managed-local-test-guide.md`](./send-managed-local-test-guide.md). **Both are fixed**; a
+re-measurement reads 0 broken. This item is the *gate*, not the fix.
+
+**A second, sharper instance found the same day, which is why this is worth a gate.**
+`Docs/history/open-decisions.md` cites `Docs/pre-live-gates.md` **twice** — at the `OD-1` row and in
+the "Pre-live gates" section — after that file moved to `Docs/history/pre-live-gates.md` during the
+documentation reorganisation. Every *other* citation in the repo (`advisory-locks.md:35`,
+`go-live-checklist.md:10`, `history/README.md:32`) already uses the new path, which is precisely why
+nobody noticed: the majority were correct. That one sits in a **frozen** ledger, so it was **annotated
+rather than repaired** — CLAUDE.md forbids editing a locked document as build work. Nothing was lost
+(G1–G4 are all carried in the living [`go-live-checklist.md`](./go-live-checklist.md) §2/§3/§4), but it
+makes the point exactly: **a link can break inside a file that policy forbids anyone from touching, and
+the only way to learn that is to check.**
+
+**Why the failure mode deserves a mechanism.** It is silent and one-directional. A reader follows a
+citation, finds nothing, and cannot distinguish "renamed" from "moved" from "never existed" — and the
+third case is real: module 3's sweep the same day found `FW-M3-6` cited by two documents while the id
+was **defined nowhere**, because a ruling whose whole disposition was *"register it"* was never carried
+out. A link-checker would not have caught that one, but it is the same family, and neither has any
+mechanism watching it.
+
+**Why it is not built here.** New gate, new work; this closeout closes what is open rather than adding
+mechanisms. It also needs a scoping decision first: whether to cover `Docs/history/`. Frozen documents
+**will** accumulate stale links by design — the tree moves under them and they may not be edited — so a
+blocking gate over them would go permanently red, which is worse than no gate. The honest shape is
+probably **blocking on live docs, reporting on frozen ones**, and that is a policy call, not an
+implementation detail.
+
+**Fix shape.** Extract `](<relative path>)` from every `Docs/**/*.md`, skip `http`/`#`/`mailto`, strip
+any `#anchor`, assert the target exists relative to the **citing** file's directory. Verified workable —
+the measurement above is that exact algorithm run by hand. Control: point one link at a nonexistent
+file and watch it go red.
 
 ---
 

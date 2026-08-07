@@ -16,7 +16,7 @@ Start at the [root README](../README.md) if you have not already.
 | [`disaster-recovery.md`](./disaster-recovery.md) | KMS key backup and recovery, DB restore, credential/key rotation. **Read the key-backup section before going live** — losing the master key is unrecoverable. |
 | [`monitoring.md`](./monitoring.md) | Where do I point uptime monitoring and the alert webhook? |
 | [`capacity-planning.md`](./capacity-planning.md) | How many accounts do I need for N sends/day, and what binds first? |
-| [`coldmail-send-managed-local-test-guide.md`](./coldmail-send-managed-local-test-guide.md) | How do I verify the whole system on a dev machine before deploying? The 13-stage local gate, and the honest list of what local testing cannot prove. |
+| [`send-managed-local-test-guide.md`](./send-managed-local-test-guide.md) | How do I verify the whole system on a dev machine before deploying? The 13-stage local gate, and the honest list of what local testing cannot prove. |
 | [`smoke-test-real-provider.md`](./smoke-test-real-provider.md) | The first-contact-with-a-real-provider procedure. Written, deliberately not yet run. |
 
 ## Reference (the integrator/extender tier)

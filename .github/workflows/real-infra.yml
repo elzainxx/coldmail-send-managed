@@ -65,23 +65,45 @@ jobs:
       # running, and never having exited — BEFORE the harness runs, so a regression names its own cause
       # instead of surfacing as four unrelated-looking mTLS/mount failures downstream.
       #
-      # BREAK-VERIFIED 2026-08-07, both directions: on the seeded stack it prints
-      # `running=true RestartCount=0` and exits 0; after `down -v` + a bare `up` (the exact defect this
-      # replaces) it prints `running=false` and exits 1. Note which assertion fires — the worker does
-      # not restart-loop, it stays dead, which is why RestartCount alone would NOT have caught it.
+      # IT ASSERTS ON THE LOG, NOT ON CONTAINER STATE, AND THAT IS THE WHOLE POINT. The first version of
+      # this step checked `running=true` and `RestartCount=0`, and that version IS FLAKY — flaky in the
+      # direction that matters, because it passes on the broken stack. The worker connects and is
+      # rejected ~1s AFTER start (src/index.js connectOnce: a register reject sets stream.stopped, and
+      # the 30-attempt/~30s budget bounds only NETWORK errors), so `up` can return while the worker is
+      # still alive-but-not-yet-rejected and a state sample taken then reads clean.
+      #
+      # MEASURED 2026-08-07 in module 3, whose worker has this identical shape — four consecutive
+      # unseeded runs, sampling the instant `up` returned:
+      #   attempt 1: running=true  RestartCount=0  -> the state check PASSES on a doomed worker
+      #   attempt 2..4: running=false RestartCount=0  -> fails
+      # One in four is a false green on the control for a defect, which reads as coverage while
+      # providing none. Re-measured with the log-based form below: 4/4 RED unseeded, 3/3 GREEN seeded.
+      #
+      # The two log lines are terminal and monotonic — once emitted they stay in the log — so waiting
+      # for one of them removes the sampling race outright instead of papering over it with a sleep.
+      # `register rejections == 0` is what makes the seeded ORDER the property under test rather than
+      # mere eventual liveness: a worker seeded late can still end up registered on a later attempt.
       - name: Worker came up seeded on the FIRST attempt (no register-reject exit)
         run: |
+          DC="docker compose -f docker-compose.yml -f tests/harness/compose.test.yml"
+          registered=0
+          for _ in $(seq 1 30); do
+            if $DC logs worker 2>&1 | grep -q "registered over mTLS stream"; then registered=1; break; fi
+            if $DC logs worker 2>&1 | grep -q "could not (re)register within the retry budget"; then break; fi
+            sleep 1
+          done
           rc="$(docker inspect -f '{{.RestartCount}}' coldmail-send-managed-worker-1)"
           running="$(docker inspect -f '{{.State.Running}}' coldmail-send-managed-worker-1)"
-          echo "worker: running=$running RestartCount=$rc"
-          if [ "$running" != "true" ] || [ "$rc" != "0" ]; then
-            echo "FAIL: worker is not running cleanly (running=$running, RestartCount=$rc)."
-            echo "The usual cause is that it registered before send_managed.boxes carried its"
+          rejected="$($DC logs worker 2>&1 | grep -c 'register rejected: unauthenticated')"
+          echo "worker: running=$running RestartCount=$rc registered=$registered register_rejections=$rejected"
+          if [ "$registered" != "1" ] || [ "$rejected" != "0" ] || [ "$running" != "true" ] || [ "$rc" != "0" ]; then
+            echo "FAIL: the worker did not register cleanly on its FIRST attempt."
+            echo "register_rejections>0 means it connected before send_managed.boxes carried its"
             echo "token_hash — the seed ran late or not at all — so it was rejected as"
             echo "unauthenticated and exited. It has no restart policy, so it stays dead, and"
             echo "SUITE 3/5 then fail with EMPTY exec output that looks like an mTLS or a volume"
             echo "bug. Check the ordering in scripts/dev.sh's reset case."
-            docker compose -f docker-compose.yml -f tests/harness/compose.test.yml logs worker | tail -20
+            $DC logs worker | tail -20
             exit 1
           fi
 

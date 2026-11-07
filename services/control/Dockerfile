@@ -1,5 +1,5 @@
 # Control (Go orchestrator) — the ONLY DB client and sole decryptor.
-FROM golang:1.23-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 # module files first for layer caching
 COPY services/control/go.mod services/control/go.sum ./

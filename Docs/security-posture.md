@@ -295,22 +295,20 @@ Neither is detectable from this system, because §3.9 means there is no independ
 that could contradict the worker. A per-send attestation is what would close it; see §3.1's note that
 there is none, and [`future-work.md`](./future-work.md).
 
-### 3.16 Two known Go module vulnerabilities are unpatched, with live call paths
+### 3.16 Known Go module vulnerabilities — cleared 2026-11-07, re-check before a pilot
 
-Not a design residual risk — a current, dated one, recorded here because a reviewer reading only §3
-would otherwise not see it:
+This was a current, dated risk and is recorded here so a reviewer reading only §3 can see its history:
 
-- **`GO-2026-5004`** — SQL injection via placeholder confusion in `pgx/v5`. The pinned version is
-  below the fix. This is the only database driver in the system, in the process that holds every
-  credential.
-- **`GO-2026-5970`** — infinite loop in `golang.org/x/text`.
+- **`GO-2026-5004`** — SQL injection via placeholder confusion in `pgx/v5` (the only database driver in
+  the system, in the process that holds every credential). Cleared: `pgx/v5` v5.7.4 → v5.10.0.
+- **`GO-2026-5970`** — infinite loop in `golang.org/x/text`. Cleared: v0.21.0 → v0.43.0.
 
-Both are real, both have live call paths, and neither is toolchain-only. Remediation was attempted in
-Phase 10 and reverted because the version bumps break the pinned builder image — so this is build
-infrastructure, not polish. The full history, versions, and remediation plan are in
-[`future-work.md`](./future-work.md) §5; it is a blocking pre-live item in
-[`go-live-checklist.md`](./go-live-checklist.md) (item 9). **Clear both before a pilot carries real
-data.**
+Both had live call paths. Remediation had been attempted in Phase 10 and reverted because the bumps
+broke the pinned `golang:1.23-alpine` builder; it was done properly on 2026-11-07 by upgrading the
+builder to `golang:1.26-alpine` (go1.26.10). `govulncheck` now reports no vulnerabilities in any of the
+four Go modules. The history and numbers are in [`future-work.md`](./future-work.md) §5; the pre-pilot
+re-check is [`go-live-checklist.md`](./go-live-checklist.md) item 9. **The result is dated** — the
+advisory database moves, so re-run `govulncheck` before a pilot carries real data.
 
 ---
 

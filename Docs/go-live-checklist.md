@@ -228,16 +228,18 @@ credential is entered** — not before launch, before the first `smtp_secret`. S
 
 ---
 
-## 9. Clear the two known module vulnerabilities
+## 9. Re-check the module vulnerabilities (was blocking — cleared 2026-11-07; re-run before a pilot)
 
-**Why it blocks:** `GO-2026-5004` (SQL injection via placeholder confusion in `pgx/v5`) and
-`GO-2026-5970` (infinite loop in `golang.org/x/text`) are both real, both have **live call paths**,
-and neither is a toolchain-only advisory. Remediation was attempted in Phase 10 and reverted because
-it breaks the pinned builder — the details, and why it is build infrastructure rather than polish,
-are in [`future-work.md`](./future-work.md) §5.
+**Status:** `GO-2026-5004` (`pgx/v5`) and `GO-2026-5970` (`golang.org/x/text`) were cleared on 2026-11-07
+by moving the builder to `golang:1.26-alpine` (go1.26.10) and bumping `pgx` to v5.10.0 and `x/text` to
+v0.43.0 — see [`future-work.md`](./future-work.md) §5. `govulncheck` reported **no vulnerabilities** in
+all four Go modules, and the full harness plus all gates were green on the new toolchain.
 
-**Action:** upgrade the builder image, bump `pgx` to ≥ v5.9.2 and `x/text` to ≥ v0.39.0, then re-run
-the **full harness** and all 5 gates on the new toolchain. Do this before a pilot carries real data.
+**Why it is still a checklist item:** the advisory database keeps moving, so "clean on 2026-11-07" does
+not mean clean on the day a pilot carries real data.
+
+**Action:** immediately before the pilot, run `govulncheck ./...` in `services/control`,
+`tools/send-managed-migrate`, `tools/provision-worker` and `tests/harness`; any live call path blocks.
 
 ---
 

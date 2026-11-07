@@ -1,0 +1,40 @@
+Copyright (c) 2026 The SEND_MANAGED module owner. All rights reserved.
+
+PROPRIETARY AND CONFIDENTIAL.
+
+This software, its source code, and its accompanying documentation
+(collectively, the "Software", as scoped in the "Scope" section below) are
+the proprietary and confidential property
+of the owner. No license or permission — express or implied — is granted to
+any person to use, copy, reproduce, modify, adapt, publish, distribute,
+sublicense, or create derivative works of the Software, in whole or in part,
+except under a separate written agreement signed by the owner.
+
+Unauthorized use, copying, or distribution is prohibited.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+OWNER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+----------------------------------------------------------------------------
+Scope — this license covers the OWNER'S OWN code only
+----------------------------------------------------------------------------
+This proprietary license applies to the project's own code and documentation:
+`services/control/`, `services/worker/`, `tools/`, `db/migrations/`, `deploy/`,
+`scripts/`, `tests/`, and `Docs/`.
+
+A sibling module, `coldmail-send-byo` (module 3), was forked from this
+repository at commit `21b65e65eba8f2cc16a84408bac6e018511ec46b` (tag
+`module3-fork-point`) by the same owner. That module carries its own copy of
+this license; the two are held by the same owner and neither grants any right
+over the other.
+
+It does NOT apply to, and grants no rights over, the third-party components
+this repository uses or embeds. Those are licensed separately under their own
+(permissive) terms and are respected and attributed in `NOTICE`.
+
+Nothing in this file alters, supersedes, or relicenses those third-party
+terms. See `NOTICE` for the full third-party attribution.

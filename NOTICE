@@ -1,0 +1,57 @@
+SEND_MANAGED Module — Third-Party Notices
+=========================================
+
+This repository contains two services and one migration/tooling layer (see README.md):
+
+  - services/control/  — the Go control plane ("Control": orchestrator, dispatcher, admin/platform API)
+  - services/worker/   — the Node.js sender worker (a dumb SMTP relay; no DB/KMS access by construction)
+  - tools/             — the migration runner (send-managed-migrate), worker provisioner, cert/secret tooling
+
+None of the above is a fork of a third-party project. A sibling module, `coldmail-send-byo` (module 3),
+was forked from THIS repository by the same owner — see the top-level LICENSE's "Scope" section. This
+NOTICE covers third-party components consumed as dependencies, not that relationship.
+
+The following third-party components are used, and their licenses are respected.
+
+--------------------------------------------------------------------------------
+1. Go module dependencies (services/control, tools/send-managed-migrate, tools/provision-worker, tests/harness)
+--------------------------------------------------------------------------------
+  github.com/jackc/pgx/v5              v5.10.0  MIT           — Postgres driver
+  github.com/jackc/pgpassfile          v1.0.0   MIT           — pgx indirect dependency
+  github.com/jackc/pgservicefile       (pseudo) MIT           — pgx indirect dependency
+  github.com/jackc/puddle/v2           v2.2.2   MIT           — pgx indirect dependency (connection pool)
+  golang.org/x/crypto                  v0.58.0  BSD-3-Clause  — bcrypt (admin/worker token hashing); v0.31.0 in tools/provision-worker
+  golang.org/x/sync                    v0.24.0  BSD-3-Clause  — golang.org/x/crypto / pgx indirect dependency
+  golang.org/x/text                    v0.43.0  BSD-3-Clause  — golang.org/x/crypto / pgx indirect dependency
+
+  Each is consumed as an unmodified dependency via Go modules (`go.sum` pins exact versions and
+  content hashes). None is forked or patched. Versions are those recorded in each module's go.mod;
+  `go.mod`/`go.sum` are the authority if this table and they ever disagree.
+
+--------------------------------------------------------------------------------
+2. Node.js dependencies (services/worker)
+--------------------------------------------------------------------------------
+  services/worker/package.json declares `"dependencies": {}` by design — the worker ships no database
+  driver and no KMS SDK (CLAUDE.md Rule 6: structural, not merely a runtime check). It uses only
+  Node.js's own built-in modules (`tls`, `net`, `crypto`, etc.). Nothing to attribute here.
+
+--------------------------------------------------------------------------------
+3. Container base images and dev-stack images (docker-compose.yml)
+--------------------------------------------------------------------------------
+  postgres:16-alpine        PostgreSQL License (permissive) — dev/CI database
+  golang:1.26-alpine        BSD-3-Clause (Go) + Alpine's own license — Go build stage
+  node:20-alpine            MIT (Node.js) + Alpine's own license — worker build stage
+  alpine:3.20               MIT — final-stage base for Go binaries
+  axllent/mailpit:latest    MIT — dev/CI SMTP sink, never used in production
+
+  These are pulled, unmodified, as build/runtime bases. None is forked or redistributed as part of
+  this repository's own source.
+
+--------------------------------------------------------------------------------
+Project's own code
+--------------------------------------------------------------------------------
+  The project's own code (services/, tools/, db/migrations/, deploy/, scripts/, tests/, and Docs/)
+  is licensed under the top-level LICENSE file — PROPRIETARY / all-rights-reserved, matching modules 1
+  and 3. This NOTICE records ONLY the third-party components the project must respect; nothing here
+  grants rights over the owner's own code, and nothing in the top-level LICENSE alters or relicenses
+  the third-party terms recorded above.

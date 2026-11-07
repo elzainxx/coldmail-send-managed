@@ -2,7 +2,7 @@
 
 The build is sealed (`Docs/architecture-overview.md`'s build-status section; verdict **GO**).
 Everything below is a **going-live confirmation or operator action**, not a build blocker — the
-module is implemented and proven in the real-infra harness (`scripts/dev.sh test`, 53/53 green)
+module is implemented and proven in the real-infra harness (`scripts/dev.sh test`, 62/62 green as of 2026-11-07)
 without any of these. They become mandatory the moment this module points at a real platform
 database and starts sending real mail. Nothing here is code to write; each item is a setup step,
 a coordination point, or an operational decision an operator/ops team makes before or at launch.
@@ -11,6 +11,18 @@ Cross-reference: `Docs/history/pre-live-gates.md` (G1-G4, the platform-coordinat
 `Docs/history/open-decisions.md` (G1-G5, P9-A, S8, S15) are the authoritative source for the reasoning
 behind each item; this document is the single ordered checklist a launch operator actually works
 through.
+
+> **Status as of 2026-11-07 (after the post-audit fixes).**
+> - **§9 (module vulnerabilities): cleared** — builder `golang:1.26-alpine`, `pgx` v5.10.0, `x/text` v0.43.0;
+>   `govulncheck` reports no vulnerabilities in any of the four Go modules. It stays on this list because the
+>   advisory database moves: re-run it immediately before a pilot.
+> - **Everything else on this list is unchanged and still open** (17 unchecked boxes). The fixes touched no
+>   operator action here: the real-provider smoke test, the master-key backup and recovery drill, the retention
+>   and purge promotions and the monitoring poller all remain to be done.
+> - **A known gap, carried deliberately:** `scripts/dev.sh` still merges the RAM-backed Postgres
+>   (`tests/harness/compose.test.yml`) unconditionally. Module 3 fixed this as #131; it has **not** been ported
+>   here, so on this module's default dev stack `docker stop postgres` destroys the database. Registered in
+>   [`future-work.md`](./future-work.md). It does not affect production.
 
 ---
 

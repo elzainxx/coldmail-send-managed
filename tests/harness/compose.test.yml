@@ -1,7 +1,9 @@
-# OVERRIDE layer over ../../docker-compose.yml (§4.1). NOT a fork — service names, DB name
+# OPT-IN override layer over ../../docker-compose.yml (§4.1). NOT a fork — service names, DB name
 # (platform), ordering, and least-privilege mounts all come from the base file unchanged.
-# Run: docker compose -f docker-compose.yml -f tests/harness/compose.test.yml up
-#   (or set COMPOSE_FILE=docker-compose.yml:tests/harness/compose.test.yml)
+# scripts/dev.sh merges this file ONLY when DEV_RAM_PG=1 (CI sets it). It is NOT merged by default: the
+# RAM-backed Postgres below loses the whole database on any container stop, so the default stack must not
+# be this one. Run it by hand with:
+#   docker compose -f docker-compose.yml -f tests/harness/compose.test.yml up
 # It changes ONLY test-specific knobs: RAM-backed Postgres for speed. Everything else
 # (real Control, real worker, real Mailpit, real migrations) is identical to what devs run.
 services:

@@ -10,7 +10,7 @@
 # tests/harness/phase3_send.sh S1, which greps plaintext AND base64 in logs and in the DB.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
-DC="${COMPOSE_INVOCATION:-docker compose -f docker-compose.yml -f tests/harness/compose.test.yml}"
+DC="${COMPOSE_INVOCATION:-$(bash scripts/dev.sh compose)}"  # the invocation dev.sh uses (RAM Postgres only under DEV_RAM_PG=1)
 
 [[ -f .env ]] || { echo "no_secret_leak: .env missing (run scripts/dev.sh certs first)"; exit 1; }
 TOKEN="$(grep -E '^DEV_WORKER_TOKEN=' .env | cut -d= -f2-)"

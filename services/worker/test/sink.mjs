@@ -38,7 +38,16 @@ export function startSink(opts = {}) {
     sock.setEncoding("utf8");
     let buf = "";
     let inData = false;
-    write(sock, "220 test-sink ESMTP ready");
+    // A server greets ONCE, on the plaintext connection. After STARTTLS (RFC 3207 §4.2) it does NOT greet again — the
+    // client simply restarts the session with EHLO. This used to greet on the secure socket too, which put an unsolicited
+    // "220" on the wire ahead of the reply to the client's post-TLS EHLO. src/smtp.js drops a reply that arrives while no
+    // read() is pending (#pushLine), so whether the stray line was swallowed or taken for the EHLO reply — shifting every
+    // later reply by one, so AUTH LOGIN was "answered" with a 250 — depended on event-loop timing between TLS 'secureConnect'
+    // and the first data event. MEASURED 2026-11-08 (module 3, same sink): on the Windows dev host the stray line arrived
+    // before any read() was pending and was swallowed (every test green); on Linux — Node 20.20 AND Node 24.22, 3 of 3
+    // runs each — it arrived after, was taken for the EHLO reply, and 10 tests failed with auth_failed. So it was never
+    // a Node-version difference; the dev host's timing was hiding it. Pinned by sink_fidelity.test.mjs.
+    if (!isTls) write(sock, "220 test-sink ESMTP ready");
     sock.on("data", (chunk) => {
       buf += chunk;
       let idx;

@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 
-DC="${COMPOSE_INVOCATION:-docker compose -f docker-compose.yml -f tests/harness/compose.test.yml}"
+DC="${COMPOSE_INVOCATION:-$(bash scripts/dev.sh compose)}"  # the invocation dev.sh uses (RAM Postgres only under DEV_RAM_PG=1)
 MANIFEST="Docs/config-manifest.txt"
 
 # 1) Expected keys = non-comment, non-blank lines of the manifest.

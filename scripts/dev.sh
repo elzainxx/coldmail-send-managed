@@ -7,7 +7,20 @@ cd "$(dirname "$0")/.."
 
 # Explicit -f flags (portable): COMPOSE_FILE's separator differs by OS (':' Linux, ';'
 # Windows), so we pass both files explicitly instead. Base + harness override (§4.1).
-COMPOSE="docker compose -f docker-compose.yml -f tests/harness/compose.test.yml"
+#
+# THE RAM-BACKED POSTGRES IS OPT-IN (module 3's #131, ported to this module). tests/harness/compose.test.yml puts
+# Postgres' data directory on a tmpfs with fsync=off — faster, and exactly right for a throwaway CI run, and exactly
+# wrong for anything that stops a container: a `docker stop postgres` frees the tmpfs, so the next start brings up an
+# EMPTY database. This script used to merge that file unconditionally, so an outage drill on the default dev stack
+# silently DESTROYED the database and read as a catastrophic recovery bug. The default is now the base file alone: the
+# data lives in the image's volume, which survives stop/start and a compose recreate. CI sets DEV_RAM_PG=1 and keeps
+# its speed. Anything that invokes compose on this stack should take its invocation from `scripts/dev.sh compose`
+# rather than re-deriving it, so a default-mode stack is never re-merged with the RAM override (compose would then see
+# a changed postgres spec and recreate it — onto a tmpfs).
+COMPOSE="docker compose -f docker-compose.yml"
+if [[ "${DEV_RAM_PG:-0}" == "1" ]]; then
+  COMPOSE="$COMPOSE -f tests/harness/compose.test.yml"
+fi
 
 cmd="${1:-help}"
 
@@ -65,6 +78,10 @@ PLATFORM_TOKEN=$plkey
 PLATFORM_TOKEN_HASHES=$plhash_esc
 EOF
   echo ".env written (gitignored). TWO worker tokens/hashes + operator admin key + platform service token provisioned."
+  # Hand each container-facing key (mode 600) to the uid its container runs as, and PROVE each can read it. On a real
+  # Linux host a 600 key owned by the CI user is unreadable by the Control (uid 10001) and the workers (uid 10002);
+  # Docker Desktop's bind mounts hide that, which is how it stayed invisible until the first CI run. See the script.
+  echo "== own-secrets =="; bash tools/own-secrets.sh
 }
 
 # seed_rows — the system user + BOTH dev worker rows. Called by `seed` and, crucially, by `reset`:
@@ -122,8 +139,9 @@ case "$cmd" in
            $COMPOSE up -d --wait;;
   logs)    $COMPOSE logs -f control worker;;
   ps)      $COMPOSE ps -a;;
+  compose) echo "$COMPOSE";;   # the one place the invocation is derived; scripts that run compose call this
   help|*)  cat <<EOF
-scripts/dev.sh — dev==CI entrypoint (uses base + harness override compose)
+scripts/dev.sh — dev==CI entrypoint (base compose; RAM-backed Postgres only with DEV_RAM_PG=1)
 
   certs [--force]  generate dev mTLS certs + KMS key + operator key + provision worker -> .env
   build            build all service images
@@ -132,6 +150,12 @@ scripts/dev.sh — dev==CI entrypoint (uses base + harness override compose)
   reset            down -v then up (clean slate)
   down             tear down (-v drops volumes)
   logs / ps        follow logs / show status
+  compose          print the docker compose invocation this script uses
+
+Environment:
+  DEV_RAM_PG=1     merge tests/harness/compose.test.yml: Postgres on a tmpfs with fsync=off.
+                   Faster, and what CI sets — but a `docker stop postgres` then DESTROYS the
+                   database. Leave it unset for anything that stops/starts containers.
 EOF
   ;;
 esac

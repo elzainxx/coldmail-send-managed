@@ -28,6 +28,9 @@ if [[ -f "$OUT/ca.crt" && "$FORCE" != "--force" ]]; then
   exit 0
 fi
 echo "gen-certs: writing dev mTLS material to $OUT"
+# Regenerating over keys that tools/own-secrets.sh has chown'd to a container uid would fail (openssl cannot
+# overwrite a file we no longer own), so remove the old material first. Unlinking needs only the DIRECTORY's write bit.
+rm -f "$OUT"/*.key "$OUT"/*.crt "$OUT"/*.srl 2>/dev/null || true
 
 # write_cnf(file, CN, sanCsv) — an openssl config with a prompt-less DN + SAN extension.
 write_cnf() {
@@ -79,7 +82,13 @@ leaf control "control" "DNS:control,DNS:localhost,IP:127.0.0.1"
 leaf worker "dev-worker-1" "DNS:worker,DNS:localhost"
 # 4) SMTP sink server cert (its own leaf — sink NEVER gets ca.key/control.key).
 leaf sink "smtp-sink" "DNS:smtp-sink,DNS:localhost"
+# 5) HOST-side test identity. The Node worker unit tests construct a WorkerStream that reads a client cert + key
+#    from disk (they dial in plain TCP and ignore the material). They used to read worker.key — but worker.key is
+#    owned by the worker CONTAINER's uid (tools/own-secrets.sh), which the host user is not. Giving the host its own
+#    identity, signed by the same CA, keeps every key 600 AND readable by exactly the user that needs it.
+leaf harness-client "harness-client" "DNS:localhost"
 
 rm -f "$OUT/ca.cnf"
 chmod 600 "$OUT"/*.key 2>/dev/null || true
-echo "gen-certs: done. CA + control/worker/sink leaves in $OUT (ca.key stays here, gitignored)."
+echo "gen-certs: done. CA + control/worker/sink/harness-client leaves in $OUT (ca.key stays here, gitignored)."
+echo "gen-certs: keys are 600 and owned by YOU; run tools/own-secrets.sh (dev.sh certs does) to hand control.key/worker.key to their container uids."

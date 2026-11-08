@@ -19,10 +19,15 @@ through.
 > - **Everything else on this list is unchanged and still open** (17 unchecked boxes). The fixes touched no
 >   operator action here: the real-provider smoke test, the master-key backup and recovery drill, the retention
 >   and purge promotions and the monitoring poller all remain to be done.
-> - **A known gap, carried deliberately:** `scripts/dev.sh` still merges the RAM-backed Postgres
->   (`tests/harness/compose.test.yml`) unconditionally. Module 3 fixed this as #131; it has **not** been ported
->   here, so on this module's default dev stack `docker stop postgres` destroys the database. Registered in
->   [`future-work.md`](./future-work.md). It does not affect production.
+> - **Updated 2026-11-08 — the RAM-Postgres gap is ported (module 3's #131).** `scripts/dev.sh` now runs the base compose
+>   file alone; `DEV_RAM_PG=1` opts into the RAM-backed Postgres and CI sets it. Two verifications remain open and are
+>   registered in [`future-work.md`](./future-work.md): the full harness in the *default* mode, and a real
+>   `docker stop postgres` survival drill on this module's stack. Neither affects production.
+> - **Updated 2026-11-08 — dev key ownership (found when CI first ran on a real Linux runner).** The dev keys stay
+>   mode 600 but are now owned by the uid of the container that reads them (`tools/own-secrets.sh`, run by
+>   `dev.sh certs`); a blocking CI step (`secret_ownership.sh`) fails if they are loosened or if the worker uid can
+>   read the KMS key. This is a dev/CI-only change: **production key handling is unchanged** and still governed by
+>   `install-and-deploy.md` (`chmod 400`, root-owned key directory) — no checkbox below is affected.
 
 ---
 

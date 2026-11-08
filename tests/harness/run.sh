@@ -13,7 +13,7 @@ cd "$(dirname "$0")/../.."
 
 # Compose invocation with explicit base + override -f flags (portable across OSes; passed
 # from scripts/dev.sh, or defaulted here so run.sh works standalone).
-DC="${COMPOSE_INVOCATION:-docker compose -f docker-compose.yml -f tests/harness/compose.test.yml}"
+DC="${COMPOSE_INVOCATION:-$(bash scripts/dev.sh compose)}"  # the invocation dev.sh uses (RAM Postgres only under DEV_RAM_PG=1)
 
 PASS=0; FAIL=0
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
@@ -65,8 +65,8 @@ if [[ -f .env ]]; then
   export WORKER_TOKEN="$(grep -E '^DEV_WORKER_TOKEN=' .env | cut -d= -f2-)"
 fi
 export CONTROL_WORKERLINK_URL="https://localhost:8443"
-export WORKER_MTLS_CERT="$(pwd)/secrets/dev/certs/worker.crt"
-export WORKER_MTLS_KEY="$(pwd)/secrets/dev/certs/worker.key"
+export WORKER_MTLS_CERT="$(pwd)/secrets/dev/certs/harness-client.crt"
+export WORKER_MTLS_KEY="$(pwd)/secrets/dev/certs/harness-client.key"   # the HOST-side identity: worker.key is owned by the worker container uid
 export WORKER_MTLS_CA="$(pwd)/secrets/dev/certs/ca.crt"
 
 # --- Build a migrated TEMPLATE db for the isolation suite --------------------
@@ -342,10 +342,16 @@ hr; echo "SUITE 7: worker unit tests (real local sink / real stream; credential 
 #                     TTL-bounded expiry (real stream server, real reconnect).
 # Matches every *.test.mjs by GLOB rather than hand-listing files, so a new worker unit test cannot be
 # silently left out of CI (buffer.test.mjs was added in Phase 7 Chunk 2b and this is what wires it
-# in). Quoted so node expands the pattern itself — a bare `test/` directory arg is treated as a
-# module by some Node versions and fails to resolve. Judged on its own PASS/FAIL summary.
+# in). The SHELL expands the glob, NOT node: this used to pass the pattern quoted so that node would
+# expand it, which only works on Node >= 21. On Node 20 (the worker image's own runtime, and what the
+# CI replica runs) the quoted pattern is looked up as a literal file name, nothing runs, and this suite
+# reported "ZERO tests" — invisible on a dev host whose Node is newer. A bare `test/` directory arg is
+# no alternative: some Node versions treat it as a module and fail to resolve. Shell expansion works on
+# every version; if the glob matches nothing the literal pattern is passed through, node runs zero
+# tests, and the anti-vacuity guard below fails the suite. Judged on its own PASS/FAIL summary.
 if command -v node >/dev/null 2>&1; then
-  WORKER_TEST_OUT="$( { cd services/worker && node --test "test/*.test.mjs" 2>&1; } || true )"
+  echo "  (node $(node --version))"
+  WORKER_TEST_OUT="$( { cd services/worker && node --test test/*.test.mjs 2>&1; } || true )"
   # Node's built-in runner prints "ℹ pass N" / "ℹ fail N" and "✔"/"✖" lines. Judge on fail count.
   ( echo "$WORKER_TEST_OUT" | grep -E "(pass|fail) [0-9]+" | tail -4 ) || true
   fails="$(echo "$WORKER_TEST_OUT" | grep -oE "fail [0-9]+" | grep -oE "[0-9]+" | tail -1 || true)"

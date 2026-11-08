@@ -18,7 +18,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
-DC="${COMPOSE_INVOCATION:-docker compose -f docker-compose.yml -f tests/harness/compose.test.yml}"
+DC="${COMPOSE_INVOCATION:-$(bash scripts/dev.sh compose)}"  # the invocation dev.sh uses (RAM Postgres only under DEV_RAM_PG=1)
 N_WORKERES="${1:-4}"
 MAX_LANES="${2:-16}"
 SUPER="${POSTGRES_SUPERPASS:-devsuperpass}"

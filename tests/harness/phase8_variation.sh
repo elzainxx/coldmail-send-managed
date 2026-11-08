@@ -51,15 +51,30 @@ done
 MP8T1_ID="$(curl -s "http://localhost:8025/api/v1/messages?query=to:p8t1@example.com" | grep -oE '"ID":"[^"]+"' | head -1 | cut -d'"' -f4 || true)"
 if [[ -n "$MP8T1_ID" ]]; then
   RAW8T1="$(curl -s "http://localhost:8025/api/v1/message/$MP8T1_ID/raw" || true)"
-  BASELINE_OK=1
-  echo "$RAW8T1" | grep -qE '^MIME-Version: 1\.0$' || BASELINE_OK=0
-  echo "$RAW8T1" | grep -qE '^Content-Type: text/html; charset="utf-8"$' || BASELINE_OK=0
-  echo "$RAW8T1" | grep -qE '^Content-Transfer-Encoding: 8bit$' || BASELINE_OK=0
-  echo "$RAW8T1" | grep -q -- '<!--' && BASELINE_OK=0   # no injected HTML comment
-  echo "$RAW8T1" | grep -q "User-Agent:" && BASELINE_OK=0
-  echo "$RAW8T1" | grep -q "Precedence:" && BASELINE_OK=0
+  # Each condition records WHICH one tripped. This used to set a bare flag and print "deviates", so a failure on a
+  # real Linux runner (where it was seen once and could not be explained from the dump) named no condition at all.
+  # The dump is `cat -A` so a CR (^M) or any non-ASCII byte shows up instead of hiding inside printable-looking text.
+  #
+  # THE CAUSE OF THE FAILURE THIS REPLACED: Mailpit's /raw returns the message exactly as it was received over SMTP, i.e.
+  # with CRLF line endings, so every `^Header: value$` below could never match — `$` sits before the CR, not after it. The
+  # check was written and "passed" on a Windows dev host whose bash strips CR from $(...); a real Linux runner keeps it.
+  # (And the first diagnosis of this was wrong for exactly that reason: host-side sed/awk strip CR too, so the log looked
+  # LF-only. `cat -A` of the failing run showed ^M on every line.) The shape assertions run on a CR-free COPY. RAW8T1
+  # itself stays byte-for-byte as fetched — T3 below compares two raw fetches against each other, and normalising only one
+  # of them would make "differs from the baseline" pass vacuously.
+  BASELINE_OK=1; BASELINE_WHY=""
+  RAW8T1_LF="$(printf '%s\n' "$RAW8T1" | tr -d '\r')"
+  must_match()  { printf '%s\n' "$RAW8T1_LF" | grep -qE -- "$2" || { BASELINE_OK=0; BASELINE_WHY="$BASELINE_WHY [absent: $1]"; }; }
+  must_absent() { if printf '%s\n' "$RAW8T1_LF" | grep -q -- "$2"; then BASELINE_OK=0; BASELINE_WHY="$BASELINE_WHY [present: $1]"; fi; }
+  must_match  "MIME-Version: 1.0"                  '^MIME-Version: 1\.0$'
+  must_match  "Content-Type: text/html; utf-8"     '^Content-Type: text/html; charset="utf-8"$'
+  must_match  "Content-Transfer-Encoding: 8bit"    '^Content-Transfer-Encoding: 8bit$'
+  must_absent "injected HTML comment"              '<!--'
+  must_absent "User-Agent header"                  'User-Agent:'
+  must_absent "Precedence header"                  'Precedence:'
   [[ "$BASELINE_OK" == "1" ]] && ok "P8 T1: the delivered message has exactly the Phase 3 shape (no injected comments/UA/Precedence, 8bit single-part)" \
-    || bad "P8 T1: the delivered message deviates from the Phase 3 shape while every toggle reads off — RAW:\n$RAW8T1"
+    || bad "P8 T1: the delivered message deviates from the Phase 3 shape while every toggle reads off —${BASELINE_WHY} — RAW (cat -A):
+$(printf '%s\n' "$RAW8T1" | cat -A)"
 else
   bad "P8 T1: could not locate the delivered message in Mailpit for p8t1@example.com"
 fi

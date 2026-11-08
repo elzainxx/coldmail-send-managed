@@ -62,9 +62,9 @@ function makeWorker(port, extra = {}) {
     workerId: "worker-test",
     token: "tok",
     // certPath/keyPath/caPath are read at construction (fs.readFileSync) even with a custom dial, so
-    // point them at the real dev certs; the plain dial ignores the material.
-    certPath: path.join(CERTS, "worker.crt"),
-    keyPath: path.join(CERTS, "worker.key"),
+    // point them at the HOST-side test identity (harness-client, owned by the host user; worker.key belongs to the worker container uid); the plain dial ignores the material.
+    certPath: path.join(CERTS, "harness-client.crt"),
+    keyPath: path.join(CERTS, "harness-client.key"),
     caPath: path.join(CERTS, "ca.crt"),
     serverName: "control",
     heartbeatSec: 3600, // no heartbeat noise during the short test

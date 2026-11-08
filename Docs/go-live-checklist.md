@@ -19,10 +19,12 @@ through.
 > - **Everything else on this list is unchanged and still open** (17 unchecked boxes). The fixes touched no
 >   operator action here: the real-provider smoke test, the master-key backup and recovery drill, the retention
 >   and purge promotions and the monitoring poller all remain to be done.
-> - **Updated 2026-11-08 — the RAM-Postgres gap is ported (module 3's #131).** `scripts/dev.sh` now runs the base compose
->   file alone; `DEV_RAM_PG=1` opts into the RAM-backed Postgres and CI sets it. Two verifications remain open and are
->   registered in [`future-work.md`](./future-work.md): the full harness in the *default* mode, and a real
->   `docker stop postgres` survival drill on this module's stack. Neither affects production.
+> - **Updated 2026-11-08 — the RAM-Postgres gap is ported (module 3's #131) and verified on a runner.** `scripts/dev.sh` now
+>   runs the base compose file alone; `DEV_RAM_PG=1` opts into the RAM-backed Postgres and CI sets it. On GitHub Actions
+>   ([run 42499590634](https://github.com/elzainxx/coldmail-send-managed/actions/runs/42499590634), the on-demand `outage-drill`
+>   workflow) the whole harness passes in the default mode (62/0) and the **real `docker stop postgres` drill passes 22/22**:
+>   the Control halts cleanly, fails closed, invents nothing, and delivers the in-flight job exactly once on recovery. This
+>   is the repository's own evidence for the checklist's database-outage item; re-run it on the deployed shape before a pilot.
 > - **Updated 2026-11-08 — dev key ownership (found when CI first ran on a real Linux runner).** The dev keys stay
 >   mode 600 but are now owned by the uid of the container that reads them (`tools/own-secrets.sh`, run by
 >   `dev.sh certs`); a blocking CI step (`secret_ownership.sh`) fails if they are loosened or if the worker uid can

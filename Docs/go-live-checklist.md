@@ -380,9 +380,11 @@ recipient-domain distribution and `smtp_response` text (the accepted V1 cost, Ph
 
 - [ ] `scripts/dev.sh test` (or the prod-equivalent harness invocation) is green — full behavioral
       suite against the ACTUAL deployed images, not a stale build.
-- [ ] All 9 CI gates green: `config_drift`, `contract_drift`, `migration_lint`,
+- [ ] All 13 CI gates green: `config_drift`, `contract_drift`, `migration_lint`,
       `config_consumption`, `config_consumption_selftest`, `no_secret_leak`, `drain_grace`,
-      `test_enumeration`, `test_enumeration_selftest`. (The two `_selftest` gates are paired controls:
+      `test_enumeration`, `test_enumeration_selftest`, `dsn_scrub_wiring`, `postgres_durability`,
+      `secret_ownership`, `go_suite_selftest` (re-derived from `tests/harness/checks/` on 2026-11-08; this line said
+      9 while 13 were wired). (The `_selftest` gates are paired controls:
       each deliberately breaks the gate it names and fails if that gate stays green, so a gate cannot
       quietly stop checking anything.)
 - [ ] The deployment's SIGTERM grace clears `shutdown_drain_timeout_sec` — `stop_grace_period` if

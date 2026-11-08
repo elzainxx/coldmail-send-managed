@@ -85,7 +85,11 @@ while IFS='|' read -r key pattern; do
   hits=""
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
-    if sed -e 's|//.*||' "$f" | grep -qE "$pattern"; then
+    # NOT `grep -q`: under `pipefail`, `-q` exits at the FIRST match while sed is still writing, sed dies with a broken
+    # pipe, and the pipeline reports FAILURE for a line that matched — so a real code read was judged "ONLY INSIDE
+    # COMMENTS". Timing-dependent, worse on bigger files; it failed on the first real GitHub runner for keys that are
+    # plainly read, and not on the dev host. Without -q grep drains its input, sed always finishes, and the status is true.
+    if sed -e 's|//.*||' "$f" | grep -E "$pattern" >/dev/null; then
       hits+="$f"$'\n'
     fi
   done < <(grep -rlE "$pattern" --include=*.go --include=*.js . 2>/dev/null \

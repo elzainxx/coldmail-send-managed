@@ -179,6 +179,14 @@ jobs:
         if: always()
         run: bash tests/harness/checks/test_enumeration_selftest.sh
 
+      # The harness judges every Go package through go_suite. Its verdict used to be `echo "$out" | grep -q` under pipefail,
+      # which reports a REAL early `--- FAIL` as absent once the verbose output outgrows a pipe buffer: a failing package
+      # recorded as PASSING. This runs the real go_suite against a throwaway failing package (and a passing one, so a
+      # reject-everything go_suite cannot satisfy it). Needs only Go.
+      - name: Harness SELF-TEST — go_suite records a failing Go package as FAILED and says why (BLOCKING)
+        if: always()
+        run: bash tests/harness/checks/go_suite_selftest.sh
+
       - name: Shutdown gate — SIGTERM grace clears shutdown_drain_timeout_sec (BLOCKING)
         if: always()
         run: bash tests/harness/checks/drain_grace.sh

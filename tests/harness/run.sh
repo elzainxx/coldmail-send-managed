@@ -167,6 +167,15 @@ go_suite() { # $1=dir  $2=label
   declared="$( { cd "$1" && GOTOOLCHAIN=local go test -list '.*' . 2>/dev/null | grep -cE '^(Test|Example|Fuzz)'; } || true )"
   out="$( { cd "$1" && GOTOOLCHAIN=local go test -count=1 -v -timeout "$GO_SUITE_TIMEOUT" . 2>&1 | grep -vE "unlinkat|being used by another process"; } || true )"
   echo "$out" | grep -E "^(ok|FAIL|--- (PASS|FAIL))" | tail -40
+  # THE FILTER ABOVE KEEPS ONLY VERDICT LINES, so a failing test's REASON (its t.Errorf/t.Fatalf text) never reached the log:
+  # the first red run of module 3's equivalent suite on a real GitHub runner said only "--- FAIL: TestEvaluate_T5…" and
+  # nothing about which assertion tripped, so it could be neither explained nor reproduced. A report that drops its own
+  # evidence is indistinguishable from one with nothing to say. On a failure, print the assertion lines. `sed -n '1,40p'`
+  # rather than `head -40`: head exits early, the writer then dies of a broken pipe, and under pipefail that fails the pipeline.
+  if grep -qE "^--- FAIL|^FAIL\b|^panic:" <<<"$out"; then
+    echo "  --- failure detail (the assertion text the verdict filter above hides) ---"
+    { grep -E "^[[:space:]]+[A-Za-z0-9_./-]+\.go:[0-9]+:|^panic:" <<<"$out" | sed -n '1,40p' | cut -c1-400; } || true
+  fi
   ran="$(echo "$out" | count_ran)"
   skipped="$(echo "$out" | grep -cE '^--- SKIP: ' || true)"
   echo "  counts: declared=$declared ran=$ran skipped=$skipped"
@@ -178,10 +187,13 @@ go_suite() { # $1=dir  $2=label
   # Branch ORDER is deliberate: timeout and FAIL come first because they are the more specific
   # diagnosis of the same shortfall, and the shortfall branch comes BEFORE ok() so that a package
   # exiting 0 with tests missing can never be reported as passing.
-  if echo "$out" | grep -qE "^panic: test timed out"; then
+  # The verdicts below read $out through HERE-STRINGS, not `echo "$out" | grep -q`: with `-q` the reader exits at the first
+  # match, `echo` then dies of a broken pipe once $out outgrows the pipe buffer, and under pipefail the pipeline reports
+  # "no match" — a real `--- FAIL` judged absent, i.e. a FALSE GREEN. A here-string has no pipeline to fail.
+  if grep -qE "^panic: test timed out" <<<"$out"; then
     echo "  NOTE: package exceeded GO_SUITE_TIMEOUT=$GO_SUITE_TIMEOUT — no verdict was reached; this is a BUDGET failure, not a test failure. Raise the budget or split the package."
     bad "$2 (TIMED OUT after $GO_SUITE_TIMEOUT — ran $ran of $declared declared, no verdict)"
-  elif echo "$out" | grep -qE "^--- FAIL|^FAIL\b"; then bad "$2"
+  elif grep -qE "^--- FAIL|^FAIL\b" <<<"$out"; then bad "$2"
   elif [ "$declared" -gt 0 ] && [ "$ran" -lt "$declared" ]; then
     echo "  NOTE: $((declared - ran)) declared test(s) never EXECUTED ($skipped skipped, $((declared - ran - skipped)) with no result at all). go test exited without a FAIL line, so this would have been reported as PASSING. Causes seen here: tests gated on an env var that was empty (TEST_TEMPLATE_DB=\"\" skips 44 of platformapi's 49), or a truncated run (timeout/panic). NOT satisfied by raising GO_SUITE_TIMEOUT, and NOT satisfied by declaring the skips intended."
     bad "$2 (EXECUTED $ran OF $declared DECLARED TESTS — $skipped skipped, $((declared - ran)) unaccounted for)"

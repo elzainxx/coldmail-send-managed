@@ -28,7 +28,9 @@ cd "$(dirname "$0")/.."
 SEC=secrets/dev
 MODE=own; [ "${1:-}" = "--check" ] && MODE=check
 
-uid_of() { sed -n "s/.*adduser -D -u \([0-9]\{1,\}\) $2.*/\1/p" "$1" | head -1; }
+# `;T;p;q` prints the first match and quits sed ITSELF — no `| head -1`, because under pipefail an early-exiting reader
+# makes the writer die of a broken pipe and fails the pipeline (the config_consumption gate was bitten by exactly that).
+uid_of() { sed -n "s/.*adduser -D -u \([0-9]\{1,\}\) $2.*/\1/;T;p;q" "$1"; }
 CTL_UID="$(uid_of services/control/Dockerfile control)"
 WRK_UID="$(uid_of services/worker/Dockerfile worker)"
 [ -n "$CTL_UID" ] && [ -n "$WRK_UID" ] || { echo "own-secrets: cannot read the container uids from services/*/Dockerfile" >&2; exit 2; }

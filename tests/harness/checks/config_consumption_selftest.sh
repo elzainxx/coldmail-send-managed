@@ -159,9 +159,21 @@ func use(cfg Config) int { return cfg.FixtureDial }
 printf '# fixture ledger with the key omitted\n' >"$TMP/Docs/config-consumers.txt"
 expect "a manifest key with no ledger line is rejected" 1 "MISSING from"
 
+# 7. THE BROKEN-PIPE FALSE RED (found 2026-11-08, the first time this gate ran on a real GitHub runner). The consumer is
+#    real, in CODE, on the FIRST line of a LARGE file. The gate pipes the comment-stripped file into `grep`; with `grep -q`
+#    under pipefail, grep exits at the first match while sed still has far more than a pipe buffer to write, sed dies of a
+#    broken pipe, and the pipeline reports failure for a line that MATCHED — "ONLY INSIDE COMMENTS", on a key that is
+#    plainly read. It is timing-dependent on real files (it failed on the runner and passed on the dev host), but with the
+#    match at the top and ~190KB of code after it, it is deterministic. The filler must be CODE, not comments: the gate
+#    strips `//…` before grepping, so comment filler would shrink sed's output under the pipe buffer and defuse the case.
+#    Paired control: restoring `grep -qE` in the gate makes THIS case fail (verified, see the commit message).
+big_body="$(printf 'package dispatch\n\nfunc use(cfg Config) int { return cfg.FixtureDial * 2 }\n'; awk 'BEGIN{for(i=0;i<12000;i++) printf "var pad%d = %d\n", i, i}')"
+fixture 'selftest_key|FixtureDial' no "$big_body"
+expect "a real consumer on line 1 of a LARGE file is accepted (broken-pipe regression)" 0 "config_consumption OK"
+
 if [[ "$fail" -eq 0 ]]; then
-  echo "config_consumption_selftest OK: 6 cases (2 accept, 4 reject) — consumer branch incl. the"
-  echo "  comment-satisfied defect found 2026-08-05, RESERVED visibility, and ledger bookkeeping"
+  echo "config_consumption_selftest OK: 7 cases (3 accept, 4 reject) — consumer branch incl. the"
+  echo "  comment-satisfied defect found 2026-08-05, the 2026-11-08 broken-pipe false red, RESERVED visibility, and ledger bookkeeping"
 fi
 
 # NOTE FOR A FUTURE READER — a real gap this control cannot close, recorded rather than silently

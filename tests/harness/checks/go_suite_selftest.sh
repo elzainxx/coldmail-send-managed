@@ -16,6 +16,9 @@
 #       text printed. Restoring the `echo | grep -q` form makes this case fail (verified).
 #   (b) a package whose tests all pass                                         -> must be recorded PASS (the accept control:
 #       a go_suite broken into rejecting everything would otherwise pass (a)).
+#   (c) a package that FAILS WITH EVERY TEST PASSING (TestMain exits 1; no `--- FAIL` line) -> must be recorded FAIL and the
+#       line that explains it must be printed. This is the shape module 3's dispatch package showed on a real runner, which
+#       the first failure-detail printer could not explain (it showed the first 40 lines of passing-test chatter).
 # It also fails if the functions cannot be extracted, so renaming them cannot turn this into a vacuous pass.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,12 +26,14 @@ RUN="$HERE/../run.sh"
 command -v go >/dev/null 2>&1 || { echo "go_suite_selftest FAIL: go is not on PATH"; exit 1; }
 
 src_count="$(awk '/^count_ran\(\) \{/,/^}/' "$RUN")"
+src_detail="$(awk '/^go_fail_detail\(\) \{/,/^}/' "$RUN")"
 src_suite="$(awk '/^go_suite\(\) \{/,/^}/' "$RUN")"
-if [[ "$src_count" != *"count_ran()"* || "$src_suite" != *"go_suite()"* ]]; then
-  echo "go_suite_selftest FAIL: could not extract count_ran()/go_suite() from $RUN — they were renamed or moved, and this control would be testing nothing"
+if [[ "$src_count" != *"count_ran()"* || "$src_detail" != *"go_fail_detail()"* || "$src_suite" != *"go_suite()"* ]]; then
+  echo "go_suite_selftest FAIL: could not extract count_ran()/go_fail_detail()/go_suite() from $RUN — they were renamed or moved, and this control would be testing nothing"
   exit 1
 fi
 eval "$src_count"
+eval "$src_detail"
 eval "$src_suite"
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -36,7 +41,7 @@ export GO_SUITE_TIMEOUT=120s GOTOOLCHAIN=local GOFLAGS=-mod=mod GOCACHE="${GOCAC
 ok()  { echo "  PASS: $1"; }     # the real run.sh versions only count; the VERDICT TEXT is what is asserted on
 bad() { echo "  FAIL: $1"; }
 
-mkdir -p "$TMP/failing" "$TMP/passing"
+mkdir -p "$TMP/failing" "$TMP/passing" "$TMP/tailonly"
 printf 'module selftest/failing\ngo 1.26\n' >"$TMP/failing/go.mod"
 cat >"$TMP/failing/a_test.go" <<'GO'
 package failing
@@ -64,6 +69,35 @@ func TestOne(t *testing.T) {}
 func TestTwo(t *testing.T) {}
 GO
 
+# A package that FAILS WITH EVERY TEST PASSING — a TestMain/cleanup exit, which is the shape module 3's dispatch package
+# showed on a real runner (231 of 231 tests ran, no `--- FAIL`, `FAIL <pkg>`). Its passing tests log ~60 indented lines, so
+# a "first N indented lines" diagnostic is filled with chatter and never reaches the line that explains the failure.
+printf 'module selftest/tailonly\ngo 1.26\n' >"$TMP/tailonly/go.mod"
+cat >"$TMP/tailonly/a_test.go" <<'GO'
+package tailonly
+
+import (
+	"fmt"
+	"os"
+	"testing"
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	fmt.Println("FIXTURE post-test cleanup failed: template database still in use")
+	if code == 0 {
+		code = 1
+	}
+	os.Exit(code)
+}
+
+func TestFine(t *testing.T) {
+	for i := 0; i < 60; i++ {
+		t.Logf("chatter from a PASSING test, line %d", i)
+	}
+}
+GO
+
 fail=0
 check() { # <name> <condition-result: 0=ok> <detail>
   if [[ "$2" -eq 0 ]]; then echo "  ok: $1"; else echo "go_suite_selftest FAIL [$1]: $3"; fail=1; fi
@@ -72,6 +106,7 @@ check() { # <name> <condition-result: 0=ok> <detail>
 # NOT piped into anything: the verdict text is captured whole, then asserted on with here-strings.
 out_fail="$(go_suite "$TMP/failing" "selftest-failing-package" 2>&1 || true)"
 out_pass="$(go_suite "$TMP/passing" "selftest-passing-package" 2>&1 || true)"
+out_tail="$(go_suite "$TMP/tailonly" "selftest-tailonly-package" 2>&1 || true)"
 
 # size of the fixture's raw output, printed so a reader can see the case really is bigger than a pipe buffer
 # (`|| true` inside the braces: the fixture is DELIBERATELY failing, so go test exits 1, and under pipefail that would fail
@@ -90,7 +125,14 @@ check "a package whose tests all pass is recorded PASS (accept control)" \
   "$(grep -qF '  PASS: selftest-passing-package' <<<"$out_pass" && ! grep -qF '  FAIL: selftest-passing-package' <<<"$out_pass" && echo 0 || echo 1)" \
   "a passing package was not recorded PASS. Output was: $out_pass"
 
+check "a package that fails with EVERY test passing (no '--- FAIL') is recorded FAIL" \
+  "$(grep -qF '  FAIL: selftest-tailonly-package' <<<"$out_tail" && echo 0 || echo 1)" \
+  "go_suite did not record a package-level failure that had no failing test. Output was: $out_tail"
+check "...and its explanation is printed (the line a 'first N lines of chatter' diagnostic would never reach)" \
+  "$(grep -qF 'FIXTURE post-test cleanup failed: template database still in use' <<<"$out_tail" && echo 0 || echo 1)" \
+  "the failure detail did not reach the line that explains the failure. Output was: $out_tail"
+
 if [[ "$fail" -eq 0 ]]; then
-  echo "go_suite_selftest OK: 5 assertions — an early FAIL followed by >64KB of output is still recorded FAIL with its reason; a passing package is still PASS"
+  echo "go_suite_selftest OK: 7 assertions — an early FAIL followed by >64KB of output is still recorded FAIL with its reason; a package that fails with every test passing is recorded FAIL and explained; a passing package is still PASS"
 fi
 exit "$fail"

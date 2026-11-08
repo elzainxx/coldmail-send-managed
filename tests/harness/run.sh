@@ -151,6 +151,34 @@ count_ran() { # stdin: `go test -v` output. Counts EXECUTED top-level results on
   grep -cE '^(--- (PASS|FAIL)): ' || true
 }
 
+# go_fail_detail — stdin: `go test -v` output of a package that FAILED. Prints WHY, not the whole transcript:
+#   1. the lines a FAILED test itself logged (under -v they precede its `--- FAIL` line), with that line;
+#   2. any `panic:` / `fatal error:` block, with 25 lines after it (the goroutine and the frames);
+#   3. if neither exists — the package failed with every test passing (a TestMain/cleanup exit, a panic after the last
+#      test) — the LAST 40 lines, because that is where such a failure announces itself.
+# The first version of this printed the first 40 indented lines of the whole output; on a real failure (module 3's
+# dispatch package) those were all t.Logf chatter from PASSING tests and it stopped before the end, so a package that failed
+# with 231 of 231 tests passing could not be explained from its own log. tail/sed read all their input, so none of this is
+# an early-exit pipe.
+go_fail_detail() {
+  local all found
+  all="$(cat)"
+  found="$(awk '
+    /^(panic:|fatal error:)/       { c = 25 }
+    c > 0                          { print; c--; next }
+    /^=== RUN/                     { buf = ""; next }
+    /^[[:space:]]+[^[:space:]]/    { buf = buf $0 "\n"; next }
+    /^--- FAIL/                    { printf "%s%s\n", buf, $0; buf = ""; next }
+    /^--- (PASS|SKIP)/             { buf = ""; next }
+  ' <<<"$all")"
+  if [[ -n "$found" ]]; then
+    printf '%s\n' "$found" | sed -n '1,120p' | cut -c1-400
+  else
+    echo "  (no '--- FAIL' line and no panic in the output: the package failed WITHOUT a failing test — the last 40 lines of its output follow)"
+    printf '%s\n' "$all" | tail -n 40 | cut -c1-400
+  fi
+}
+
 go_suite() { # $1=dir  $2=label
   local out declared ran skipped
   # The trailing `|| true` is load-bearing under `set -euo pipefail`: on Windows `go test` can
@@ -173,8 +201,8 @@ go_suite() { # $1=dir  $2=label
   # evidence is indistinguishable from one with nothing to say. On a failure, print the assertion lines. `sed -n '1,40p'`
   # rather than `head -40`: head exits early, the writer then dies of a broken pipe, and under pipefail that fails the pipeline.
   if grep -qE "^--- FAIL|^FAIL\b|^panic:" <<<"$out"; then
-    echo "  --- failure detail (the assertion text the verdict filter above hides) ---"
-    { grep -E "^[[:space:]]+[A-Za-z0-9_./-]+\.go:[0-9]+:|^panic:" <<<"$out" | sed -n '1,40p' | cut -c1-400; } || true
+    echo "  --- failure detail (what the verdict filter above hides) ---"
+    go_fail_detail <<<"$out" || true
   fi
   ran="$(echo "$out" | count_ran)"
   skipped="$(echo "$out" | grep -cE '^--- SKIP: ' || true)"

@@ -164,7 +164,10 @@ services:
       - ./secrets/dev/certs/ca.crt:/secrets/mtls/ca.crt:ro
 
   smtp-sink:
-    image: axllent/mailpit:latest
+    # PINNED BY DIGEST (2026-11-08): a floating tag is a moving target — a cold pull on a CI runner gets whatever the registry serves
+    # that day, while a developer's machine keeps an old cached copy (the replica held CoreDNS 1.14.6 while the runner pulled 1.15.0). The
+    # tag after the colon is for the reader; the digest is what Docker resolves. To move: pull, take the new digest, change both, re-run CI.
+    image: axllent/mailpit:v1.33.1@sha256:aef2aacc11f075ec0fb6874275ee4a421e688e11a96ebb296134d1735c7761ce
     environment:
       MP_SMTP_AUTH_ALLOW_INSECURE: "false"
       MP_SMTP_REQUIRE_STARTTLS: "true"     # force STARTTLS so the TLS path is really tested

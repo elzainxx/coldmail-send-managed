@@ -521,6 +521,12 @@ The most valuable stage.
 8. **Database outage** — `docker stop` Postgres for a few minutes, then start it
    - **Pass:** the Control halts cleanly, does not crash-loop, and **invents nothing** — no job is marked sent or failed during the outage. On recovery it resumes with no double-processing.
    - *This is the single most important assertion in the guide.*
+   - **Scripted (2026-11-08): `tests/harness/drills/postgres_outage.sh`**, run on a real runner by the on-demand `outage-drill` workflow
+     (`gh workflow run outage-drill.yml -R elzainxx/coldmail-send-managed`), which first runs the WHOLE harness in the default
+     volume-backed mode (never run in that mode before) and then the drill. It does the steps below with a job genuinely in flight
+     (the worker is paused), a snapshot of totals and `max(seq)` before the plug is pulled, a run request made DURING the outage that
+     must be refused and leave no job behind, and a release of the worker only after recovery so the job is delivered exactly once.
+     It refuses to run against a RAM-backed Postgres. The manual procedure below remains the specification it implements.
    - **Snapshot before you pull the plug, or "invented nothing" is unprovable.** Counting rows only
      afterwards cannot distinguish "nothing was written" from "something was written and looks
      plausible". Capture totals **and** `max(seq)` — the sequence is the strongest evidence, because a

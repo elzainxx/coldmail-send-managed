@@ -1,0 +1,52 @@
+# On-demand: the full harness in the DEFAULT (volume-backed, non-RAM) Postgres mode, then the real `docker stop postgres` outage drill.
+#
+#   gh workflow run outage-drill.yml -R elzainxx/coldmail-send-managed
+#
+# Why a separate workflow and not a step in real-infra.yml: the per-push CI deliberately runs the RAM-backed Postgres (DEV_RAM_PG=1)
+# for speed, and a RAM-backed Postgres cannot be outage-drilled — `docker stop` destroys the database. This runs the OTHER mode, where
+# the data lives in a volume, so (1) the whole harness is proven in that mode too (it had never been run for this module), and (2) the
+# drill (tests/harness/drills/postgres_outage.sh — Docs/send-managed-local-test-guide.md Stage 9 step 8) can stop and start the real
+# database with a job genuinely in flight and check that the Control halts cleanly and INVENTS NOTHING. It runs on a runner, not on a
+# developer machine, because the result that counts is the one on the real runner — and because the local VM cannot hold it.
+name: outage-drill
+on: workflow_dispatch
+
+jobs:
+  default-mode:
+    runs-on: ubuntu-latest
+    # NO `env: DEV_RAM_PG` on purpose — that is the whole point of this workflow.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate dev certs/secrets + provision dev worker (writes .env)
+        run: bash scripts/dev.sh certs
+
+      - name: Bring up the stack in the seeded order (postgres -> migrate -> seed -> rest), DEFAULT mode
+        run: bash scripts/dev.sh reset
+
+      - name: Postgres is volume-backed in this mode (the precondition of everything below)
+        run: bash tests/harness/checks/postgres_durability.sh
+
+      - name: Real-infra behavioral harness in the DEFAULT (non-RAM) mode
+        run: bash scripts/dev.sh test
+
+      # `dev.sh up` first: earlier harness suites deliberately stop and restart containers, and the drill needs control + worker running.
+      - name: Postgres outage drill — the Control halts cleanly and invents nothing
+        if: always()
+        run: bash scripts/dev.sh up && bash tests/harness/drills/postgres_outage.sh
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -f docker-compose.yml ps -a || true
+          docker compose -f docker-compose.yml logs --tail 120 control worker || true
+
+      - name: Tear down
+        if: always()
+        run: bash scripts/dev.sh down || true

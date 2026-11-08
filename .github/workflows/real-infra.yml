@@ -187,6 +187,17 @@ jobs:
         if: always()
         run: bash tests/harness/checks/go_suite_selftest.sh
 
+      # No floating image reference anywhere (no `:latest`, no untagged image), and the harness's own dependencies (Mailpit)
+      # pinned by DIGEST. A cold pull on a runner gets whatever the registry serves that day while a developer's machine keeps
+      # an old cached copy; the CI replica held CoreDNS 1.14.6 while the runner pulled 1.15.0. Static; needs no stack.
+      - name: Image pins — no floating tag, and the harness's images are pinned by digest (BLOCKING)
+        if: always()
+        run: bash tests/harness/checks/image_pins.sh
+
+      - name: Image pins SELF-TEST — the gate rejects each way a pin can be lost (BLOCKING)
+        if: always()
+        run: bash tests/harness/checks/image_pins_selftest.sh
+
       - name: Shutdown gate — SIGTERM grace clears shutdown_drain_timeout_sec (BLOCKING)
         if: always()
         run: bash tests/harness/checks/drain_grace.sh

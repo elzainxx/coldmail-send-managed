@@ -47,7 +47,7 @@ chown_to() { # chown_to <uid> <path relative to $SEC>...
   local uid="$1"; shift
   if [ "$(id -u)" = 0 ]; then ( cd "$SEC" && chown "$uid:$uid" "$@" ); return; fi
   if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then ( cd "$SEC" && sudo chown "$uid:$uid" "$@" ); return; fi
-  dock -v "$ABS:/s" -w /s alpine:3 chown "$uid:$uid" "$@"
+  dock -v "$ABS:/s" -w /s alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f chown "$uid:$uid" "$@"
 }
 
 if [ "$MODE" = own ]; then
@@ -65,7 +65,7 @@ if [ "$MODE" = own ]; then
 fi
 
 # ── the proof: read each key AS THE UID THAT MUST READ IT ──────────────────────────────────────────────────────────
-as() { local uid="$1"; shift; dock --user "$uid:$uid" -v "$ABS:/s:ro" alpine:3 sh -c "$*" >/dev/null 2>&1; }
+as() { local uid="$1"; shift; dock --user "$uid:$uid" -v "$ABS:/s:ro" alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f sh -c "$*" >/dev/null 2>&1; }
 
 as "$CTL_UID" 'cat /s/certs/control.key /s/kms/dev-master.key' || bad "the Control (uid $CTL_UID) cannot read control.key / dev-master.key — it will die at boot with 'permission denied'"
 as "$WRK_UID" 'cat /s/certs/worker.key'                        || bad "the worker (uid $WRK_UID) cannot read worker.key — it will fail to open its mTLS client"

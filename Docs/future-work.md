@@ -232,3 +232,12 @@ file and watch it go red.
 | [`operator-runbook.md`](./operator-runbook.md) | Working within these limits today. |
 | [`Docs/history/open-decisions.md`](./history/open-decisions.md) | Every decision ruled across eleven phases, with its disposition. |
 | [`CLAUDE.md`](../CLAUDE.md) | The rules any of this work must not break. Read before picking an item up. |
+
+## Every image is pinned by digest (ruled 2026-11-09)
+
+`postgres:16-alpine`, `golang:1.26-alpine`, `alpine:3.20`, `node:20-alpine` (compose, `services/*/Dockerfile`, `tools/send-managed-migrate/Dockerfile`)
+and `alpine:3` in `tools/own-secrets.sh` now carry `@sha256:`; `tests/harness/checks/image_pins.sh` rejects **any** reference without one (no
+exception list), and its scope now includes `tools/*/Dockerfile`, workflow `image:` lines and a heuristic scan of the shell tooling (23-case
+self-test). Cost: a pinned builder gets no base-image security patches until a reviewed commit bumps the digest. **Verify support status:**
+`node:20-alpine` and `alpine:3.20` are old releases (my recollection is that both are at or past upstream end-of-life — not verified from the
+build host); moving them is a separate decision.

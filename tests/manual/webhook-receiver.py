@@ -18,7 +18,7 @@ it carries only condition codes, subject ids, and timestamps.
 Run it (from the repo root):
 
     docker run -d --name s10hook --network coldmail-send-managed_default \
-      -v "$(pwd)/tests/manual:/rcv:ro" python:3.12-alpine python /rcv/webhook-receiver.py
+      -v "$(pwd)/tests/manual:/rcv:ro" python:3.15.2-alpine@sha256:a0f2e268f2ce8f3709611a90054ec6a8ae31f6251f5896b8648b9bb99835e30a python /rcv/webhook-receiver.py
 
 then set alert_webhook_url to http://s10hook:9099/hook and read `docker logs s10hook`.
 Set PORT to override 9099.

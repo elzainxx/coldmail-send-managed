@@ -5,7 +5,7 @@
   "description": "Phase-0 SKELETON SendManaged Worker: pure mTLS relay client. NO DB, NO KMS, memory-only creds. Registers + heartbeats. No SMTP send (Phase 5+).",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "scripts": {
     "start": "node src/index.js",

@@ -238,6 +238,8 @@ file and watch it go red.
 `postgres:16-alpine`, `golang:1.26-alpine`, `alpine:3.20`, `node:20-alpine` (compose, `services/*/Dockerfile`, `tools/send-managed-migrate/Dockerfile`)
 and `alpine:3` in `tools/own-secrets.sh` now carry `@sha256:`; `tests/harness/checks/image_pins.sh` rejects **any** reference without one (no
 exception list), and its scope now includes `tools/*/Dockerfile`, workflow `image:` lines and a heuristic scan of the shell tooling (23-case
-self-test). Cost: a pinned builder gets no base-image security patches until a reviewed commit bumps the digest. **Verify support status:**
-`node:20-alpine` and `alpine:3.20` are old releases (my recollection is that both are at or past upstream end-of-life — not verified from the
-build host); moving them is a separate decision.
+self-test). Cost: a pinned builder gets no base-image security patches until a reviewed commit bumps the digest.
+
+**Moved to supported releases (2026-11-09):** `node:20-alpine` → `node:24-alpine` (worker; `engines.node` and the workflows' `setup-node` → 24) and
+`alpine:3.20` → `alpine:3.24` (Go final stages, `tools/send-managed-migrate`, `own-secrets.sh`), digest-pinned. The earlier "verify support status" flag is
+closed by the move; the support dates themselves could not be looked up from the build host. `node:26-alpine` also exists in the registry.

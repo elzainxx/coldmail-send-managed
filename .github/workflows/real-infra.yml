@@ -28,12 +28,12 @@ jobs:
           go-version: "1.26"
 
       # The host-side Node tests (the worker unit suite and the harness's mTLS/variation tests) must run on the runtime the
-      # worker SHIPS on — services/worker/Dockerfile is `node:20-alpine` — not on whatever Node the runner image happens to
+      # worker SHIPS on — services/worker/Dockerfile is `node:24-alpine` — not on whatever Node the runner image happens to
       # carry that month. An unpinned toolchain is a hidden variable: it is how `node --test "glob"` (Node >= 21 only) went
       # unnoticed until a Node 20 environment ran it.
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Go lint — gofmt + vet (BLOCKING; keeps code/format from drifting)
         run: |

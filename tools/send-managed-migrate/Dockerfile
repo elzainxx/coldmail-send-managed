@@ -6,7 +6,7 @@ RUN go mod download
 COPY tools/send-managed-migrate/ ./
 RUN CGO_ENABLED=0 GOTOOLCHAIN=local go build -o /out/send-managed-migrate .
 
-FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 RUN apk add --no-cache ca-certificates
 COPY --from=build /out/send-managed-migrate /usr/local/bin/send-managed-migrate
 # db/ (migrations + preflight) is mounted at /db by compose.

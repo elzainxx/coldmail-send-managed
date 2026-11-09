@@ -1,6 +1,6 @@
 # GO-LIVE CHECKLIST
 
-The build is sealed (`Docs/architecture-overview.md`'s build-status section; verdict **GO**).
+The build is sealed (`Docs/architecture.md`'s build-status section; verdict **GO**).
 Everything below is a **going-live confirmation or operator action**, not a build blocker — the
 module is implemented and proven in the real-infra harness (`scripts/dev.sh test`, 62/62 green as of 2026-11-07)
 without any of these. They become mandatory the moment this module points at a real platform

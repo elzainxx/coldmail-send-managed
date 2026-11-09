@@ -1117,5 +1117,5 @@ bug to file, not a page. Volume and pattern are what distinguish the two, and th
 | To recover from a disaster or rotate keys | [`disaster-recovery.md`](./disaster-recovery.md) |
 | To size a deployment | [`capacity-planning.md`](./capacity-planning.md) |
 | To wire up monitoring and alerting | [`monitoring.md`](./monitoring.md) |
-| To understand how the system is shaped | [`architecture-overview.md`](./architecture-overview.md) |
+| To understand how the system is shaped | [`architecture.md`](./architecture.md) |
 | To know why something is absent | [`future-work.md`](./future-work.md) |

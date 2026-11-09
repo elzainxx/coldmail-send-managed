@@ -355,6 +355,6 @@ The codebase cannot check these; they are the deployment's half of the posture.
 |---|---|
 | [`disaster-recovery.md`](./disaster-recovery.md) | Key backup, the recovery drill, rotation, compromise response. |
 | [`go-live-checklist.md`](./go-live-checklist.md) | The pre-launch gate, including the IAM-separation sign-off. |
-| [`architecture-overview.md`](./architecture-overview.md) | Boundaries and the send path in detail. |
+| [`architecture.md`](./architecture.md) | Boundaries and the send path in detail. |
 | [`../CLAUDE.md`](../CLAUDE.md) | The build rules these properties come from — canonical. |
 | [`future-work.md`](./future-work.md) | `send_logs` at-rest encryption, bounce ingestion, and the rest of what is not built. |

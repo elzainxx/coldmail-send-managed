@@ -25,7 +25,7 @@ Start at the [root README](../README.md) if you have not already.
 |---|---|---|
 | [`config-reference.md`](./config-reference.md) | All 53 config keys: meaning, `value_type`, `default_value`, which subsystem consumes it. | `config_drift`, `config_consumption` |
 | [`api-contract.md`](./api-contract.md) | Every route on both auth domains: request/response shape, error envelopes, status codes. | `contract_drift` |
-| [`architecture-overview.md`](./architecture-overview.md) | The system's shape — services, boundaries, send path, where each guarantee is enforced. | — |
+| [`architecture.md`](./architecture.md) | The system's shape — services, boundaries, send path, where each guarantee is enforced. | — |
 | [`security-posture.md`](./security-posture.md) | What is protected, how, and the honest residual risks. The page to hand a security reviewer. | — |
 | [`future-work.md`](./future-work.md) | What is deliberately **not** built, and why it was deferred. | — |
 | [`advisory-locks.md`](./advisory-locks.md) | Every advisory-lock key in the repo + the reserved band. | — |
@@ -45,7 +45,7 @@ value or a request body outside the reference tier, don't.
 
 **Build status: COMPLETE.** All eleven phases are built, tested, and closed; the open-decisions
 ledger is empty and deferred work is registered in [`future-work.md`](./future-work.md). See
-[`architecture-overview.md`](./architecture-overview.md)'s build-status section for the verdict and
+[`architecture.md`](./architecture.md)'s build-status section for the verdict and
 the known operational limits, and [`go-live-checklist.md`](./go-live-checklist.md) before deploying
 live. The build-by-build *evidence* behind the verdict is provenance:
 [`history/phase-build-record.md`](./history/phase-build-record.md).

@@ -110,7 +110,7 @@ defaults are in `config-reference.md`; when and how to flip them is `operator-ru
 ## Provenance
 
 `history/phase-build-record.md` is the per-phase build diary (what each phase landed, which review
-gates found what). `history/open-decisions.md` is the flag-don't-fix ledger, `history/decisions/`
+gates found what). `history/open-decisions.md` is the flag-don't-fix ledger, `adr/`
 the ADRs, and `history/` the locked phase specs (12 files for 11 phases — `history/README.md` says why). See it for when to consult
 which.
 

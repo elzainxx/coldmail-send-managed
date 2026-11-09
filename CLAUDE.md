@@ -34,7 +34,7 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
 ## 2. Flag, don't silently fix
 - Contradictions, ambiguities, and locked-fact conflicts are NOT resolved by
   inventing an answer. Record them in the Open Decisions log (`Docs/history/open-decisions.md`
-  + an ADR in `Docs/history/decisions/`) and await the user's ruling.
+  + an ADR in `Docs/adr/`) and await the user's ruling.
 - Never resolve a locked contradiction on your own authority. "Locked" means locked.
 - An Open Decision blocks only the ambiguous slice; keep unrelated work moving.
 

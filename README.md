@@ -19,7 +19,7 @@ that ships no database driver and no KMS SDK, holds the credential in memory onl
 every exit from the send path, and reports the outcome back. Workers scale horizontally and are never publicly
 reachable. Everything tunable — 53 keys — is a seeded row in `send_managed.config`, changeable at
 runtime with no redeploy; there are no hardcoded tuning constants. Full shape in
-[`Docs/architecture-overview.md`](./Docs/architecture-overview.md).
+[`Docs/architecture.md`](./Docs/architecture.md).
 
 ## Run it locally
 
@@ -49,7 +49,7 @@ Nothing actually sends until `default_shared_pool_id` is set — that is expecte
 | Recover from a disaster / rotate keys | [`Docs/disaster-recovery.md`](./Docs/disaster-recovery.md) |
 | Look up a config key or its default | [`Docs/config-reference.md`](./Docs/config-reference.md) |
 | Call the API (platform or operator) | [`Docs/api-contract.md`](./Docs/api-contract.md) |
-| Understand how the system is built | [`Docs/architecture-overview.md`](./Docs/architecture-overview.md) |
+| Understand how the system is built | [`Docs/architecture.md`](./Docs/architecture.md) |
 | Review the security posture and residual risks | [`Docs/security-posture.md`](./Docs/security-posture.md) |
 | Size a deployment | [`Docs/capacity-planning.md`](./Docs/capacity-planning.md) — and [`Docs/load-test-results.md`](./Docs/load-test-results.md) for the measured run behind it |
 | Wire up monitoring and alerting | [`Docs/monitoring.md`](./Docs/monitoring.md) |

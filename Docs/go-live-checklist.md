@@ -1,39 +1,73 @@
 # GO-LIVE CHECKLIST
 
-The build is sealed (`Docs/architecture.md`'s build-status section; verdict **GO**).
-Everything below is a **going-live confirmation or operator action**, not a build blocker — the
-module is implemented and proven in the real-infra harness (`scripts/dev.sh test`, 62/62 green as of 2026-11-07)
-without any of these. They become mandatory the moment this module points at a real platform
-database and starts sending real mail. Nothing here is code to write; each item is a setup step,
-a coordination point, or an operational decision an operator/ops team makes before or at launch.
+The build is sealed ([`architecture.md`](./architecture.md#build-status-and-the-two-ceilings); verdict **GO**
+for a pilot). Everything below is a **going-live confirmation or operator action**, not a build blocker —
+the module is implemented and proven in the real-infra harness (`scripts/dev.sh test`, **62 passed, 0 failed**
+on GitHub Actions, [run 42633655325](https://github.com/elzainxx/coldmail-send-managed/actions/runs/42633655325),
+commit `96a189f`) without any of these. They become mandatory the moment this module points at a real
+platform database and starts sending real mail. Nothing here is code to write; each item is a setup step,
+a coordination point, or an operational decision an operator or ops team makes before or at launch.
 
-Cross-reference: `Docs/history/pre-live-gates.md` (G1-G4, the platform-coordination half) and
-`Docs/history/open-decisions.md` (G1-G5, P9-A, S8, S15) are the authoritative source for the reasoning
-behind each item; this document is the single ordered checklist a launch operator actually works
-through.
+Cross-reference: [`history/pre-live-gates.md`](./history/pre-live-gates.md) (G1–G4, the
+platform-coordination half) and [`history/open-decisions.md`](./history/open-decisions.md) (G1–G5, P9-A, S8,
+S15) are the authoritative source for the reasoning behind each item; the living ledger is
+[`open-decisions.md`](./open-decisions.md) (zero open). This document is the single ordered checklist a
+launch operator actually works through.
 
-> **Status as of 2026-11-07 (after the post-audit fixes).**
-> - **§9 (module vulnerabilities): cleared** — builder `golang:1.26-alpine`, `pgx` v5.10.0, `x/text` v0.43.0;
->   `govulncheck` reports no vulnerabilities in any of the four Go modules. It stays on this list because the
->   advisory database moves: re-run it immediately before a pilot.
-> - **Everything else on this list is unchanged and still open** (17 unchecked boxes). The fixes touched no
->   operator action here: the real-provider smoke test, the master-key backup and recovery drill, the retention
->   and purge promotions and the monitoring poller all remain to be done.
-> - **Updated 2026-11-08 — the RAM-Postgres gap is ported (module 3's #131) and verified on a runner.** `scripts/dev.sh` now
->   runs the base compose file alone; `DEV_RAM_PG=1` opts into the RAM-backed Postgres and CI sets it. On GitHub Actions
->   ([run 42499590634](https://github.com/elzainxx/coldmail-send-managed/actions/runs/42499590634), the on-demand `outage-drill`
->   workflow) the whole harness passes in the default mode (62/0) and the **real `docker stop postgres` drill passes 22/22**:
->   the Control halts cleanly, fails closed, invents nothing, and delivers the in-flight job exactly once on recovery. This
->   is the repository's own evidence for the checklist's database-outage item; re-run it on the deployed shape before a pilot.
-> - **Updated 2026-11-08 — dev key ownership (found when CI first ran on a real Linux runner).** The dev keys stay
->   mode 600 but are now owned by the uid of the container that reads them (`tools/own-secrets.sh`, run by
->   `dev.sh certs`); a blocking CI step (`secret_ownership.sh`) fails if they are loosened or if the worker uid can
->   read the KMS key. This is a dev/CI-only change: **production key handling is unchanged** and still governed by
->   `install-and-deploy.md` (`chmod 400`, root-owned key directory) — no checkbox below is affected.
+## How to read the status marks
+
+Every item carries one real status — nothing is "unchecked by default".
+
+| Mark | Meaning |
+|---|---|
+| ✅ | **Done**, with the evidence cited (run URL, commit, test, ADR). |
+| ⏳ | **Owner-only, real-world step.** It needs a real platform database, a real KMS key, a real provider or a real decision that only the owner (or the platform/ops team) can make. The repository cannot do it, and it has **not** been done. Where the *mechanism* behind the step is already proven in this repo, the evidence is cited next to it so you know exactly what is and is not left to do. |
+| ➖ | **Not applicable** to this module or this deployment shape, with the reason. *(None at present.)* |
+
+The ⏳ items are also collected, with why only the owner can do them, in the owner's action list (`OWNER-ACTIONS.md` in the parent repository).
+
+## Status at a glance
+
+| # | Item | Status | Evidence — or what only you can do |
+|---|---|---|---|
+| 1 | Set `default_shared_pool_id` | ⏳ | Needs the real pool and real accounts on the live deployment. Mechanism proven: `tests/harness/phase3_send.sh` sets it and delivers end to end through a real worker (SUITE 9, run 42633655325). |
+| 2 | Confirm the real `public.users` / `public.job_items` shapes | ⏳ | Needs the real platform schema. The pre-flight (`db/preflight/check_platform_tables.sql`) checks existence only, by design; the assumed shape is recorded in [ADR-0007](./adr/0007-assumed-platform-table-shapes.md). |
+| 3 | Advisory-lock band and migration admin credential | ⏳ | Needs platform-side confirmation. The band is registered in [architecture](./architecture.md#advisory-lock-key-registry) (OD-10). |
+| 4 | KMS/IAM separation — platform roles hold no Decrypt | ⏳ | Needs the real cloud IAM policy; **no automated re-check exists**. The code-level half is done: [ADR-0006](./adr/0006-brain-sole-decryptor.md), and SUITE 5 proves the worker container cannot read key material (run 42633655325). |
+| 5 | Provision workers out-of-band | ⏳ | Needs the real worker hosts. Procedure proven on the dev stack: add and remove a worker (Stage 11 steps 3–4, `b103980`); a revoked worker is refused on its next connect. |
+| 6 | Promote auto-quarantine / auto-pause to `enforce` | ⏳ | **Deliberately post-launch**, after an observation window of real traffic — it cannot be done before there is traffic. Mechanism: [ADR-0014](./adr/0014-every-autonomous-mutator-gets-a-shadow-ladder.md); both ladders driven live in Stage 10 steps 3–4 (`6d773ba`). |
+| 7 | Accounts are pre-warmed | ⏳ | Needs real mailboxes on real domains with real reputation. The module has no ramp logic by design ([future-work §1](./future-work.md)). |
+| 8 | Back up the master key and run the recovery drill | ⏳ | Needs the real key and real off-host storage — the one unrecoverable loss. The restore drill is proven on the dev stack **by a decrypt, not a clean boot** (Stage 11 step 1, `d158119`), and rotation both ways (`ff83bac`). |
+| 9 | Module vulnerabilities | ✅ cleared 2026-11-07 · ⏳ re-run on pilot day | `GO-2026-5004` / `-5970` cleared by moving the builder to `golang:1.26-alpine` (`4640dfb`): `govulncheck` 0 live call paths in all four Go modules. The advisory database moves, so only a run on the day can say it is still clean. |
+| 10 | Wire monitoring; the webhook needs a poller | ⏳ | Your uptime monitor, cron entry, webhook receiver and log shipping. Mechanism proven: all three alert conditions fire and are cross-checked (Stage 10 steps 6–7, `bfb3910`). |
+| 11 | Real-provider smoke test | ⏳ | Real provider, real sending reputation. The procedure is written (below) and **deliberately not run**. |
+| 12 | Promote `retention_mode` to `enforce` | ⏳ | A required config flip on the real deployment, after confirming `debug_log_retention_days` against your own privacy commitments. Mechanism: ADR-0014 / `c300fe6` (`send_managed_0026`). |
+| PF | Final pre-flight | see [its own table](#final-pre-flight-run-immediately-before-flipping-live-traffic-on) | |
+
+## Evidence already recorded in this repository
+
+- **Harness and gates (✅):** `HARNESS RESULT: 62 passed, 0 failed`; **15 gate scripts** green — 11 gates and
+  4 paired self-tests (run 42633655325). The authoritative count is derived by `test_enumeration`, not
+  written here. After any later push, read the run, not this line.
+- **Database outage (✅):** the real `docker stop postgres` drill passes 22/22 and the whole harness passes
+  in the default (non-RAM) mode, on a runner
+  ([run 42499590634](https://github.com/elzainxx/coldmail-send-managed/actions/runs/42499590634), on-demand
+  `outage-drill` workflow): the Control halts cleanly, fails closed, invents nothing, and delivers the
+  in-flight job exactly once on recovery. This is the repository's own evidence for the outage item; re-run it
+  on the deployed shape before a pilot.
+- **Dev key ownership (✅):** dev keys stay mode 600 but are owned by the uid of the container that reads them
+  (`tools/own-secrets.sh`, run by `dev.sh certs`); the blocking `secret_ownership` step fails if they are
+  loosened. Dev/CI only — **production key handling is unchanged** and governed by
+  [`install-and-deploy.md`](./install-and-deploy.md) (`chmod 400`, root-owned key directory).
+- **Supply chain (✅):** every image is pinned by digest and `image_pins` rejects any unpinned reference;
+  worker `node:24-alpine`, Go final stages `alpine:3.24` (ledger rows M2-CI-OD-4/5).
+- **Decision ledger (✅):** zero open — [`open-decisions.md`](./open-decisions.md).
 
 ---
 
 ## 1. Set `default_shared_pool_id` (REQUIRED — base sending does not work without it)
+
+> **Status: ⏳ owner-only.** A real pool, real accounts and one config write on the live deployment. The mechanism is already proven: `tests/harness/phase3_send.sh` sets the key and delivers end to end through a real worker (SUITE 9, CI run 42633655325).
 
 **Why it blocks:** Phase 4 §4.2/§4.3 — base (non-dedicated) campaigns resolve their sending pool
 through `default_shared_pool_id`. It is seeded `NULL` (Phase 1 `send_managed_0010`) and stays `NULL`
@@ -55,6 +89,8 @@ sees) — it does not fail loudly, which means it is easy to forget.
 
 ## 2. Confirm the real `public.users` / `public.job_items` column shapes (G3 / OD-8)
 
+> **Status: ⏳ owner-only.** Needs the real platform schema, which this repository cannot see. Pre-flight checks existence only, by design; the assumed shape is [ADR-0007](./adr/0007-assumed-platform-table-shapes.md).
+
 **Why it blocks:** the module's pre-flight (`db/preflight/check_platform_tables.sql`) checks table
 **existence only**, deliberately (a column-level check would false-fail every time the platform
 legitimately adds an unrelated column). It does NOT verify the actual column set the module's
@@ -73,6 +109,8 @@ silently adapt the module's assumptions.
 ---
 
 ## 3. Settle the advisory-lock key namespace + the migration admin credential source (G1, G2 / OD-1, OD-10)
+
+> **Status: ⏳ owner-only.** Needs explicit platform-side confirmation of both points. The band is registered in [`architecture.md`](./architecture.md#advisory-lock-key-registry); the migration runner takes its admin credential from the `MIGRATE_DATABASE_URL` environment variable.
 
 **Why it blocks:** two distinct collision risks, both operational rather than code:
 
@@ -95,6 +133,8 @@ infrastructure.
 
 ## 4. Verify KMS/IAM separation — platform roles must NOT hold Decrypt (G4 / S15)
 
+> **Status: ⏳ owner-only.** The cloud IAM grant is not code-checkable and has no automated re-check. The code-level half is done: [ADR-0006](./adr/0006-brain-sole-decryptor.md) (the `Decrypt` capability is wired only into `internal/dispatch`), and SUITE 5 proves the worker container cannot read key material (CI run 42633655325).
+
 **Why it blocks:** this is CLAUDE.md Rule 6's load-bearing security property — "Control is the SOLE
 decryptor. KMS Decrypt is Control-only. The platform and operators hold NO Decrypt capability." It
 is enforced structurally in code (the `internal/credential` Decryptor is wired only into
@@ -115,6 +155,8 @@ against the real KMS key policy.
 ---
 
 ## 5. Provision workers out-of-band (token = authority, cert = transport, revocation)
+
+> **Status: ⏳ owner-only** for the real worker hosts. The procedure is proven on the dev stack: a third worker added and a worker removed with no Control reconfiguration (Stage 11 steps 3–4, `b103980`); a worker with a cleared token is refused on its next connect regardless of its cert.
 
 **Why it's a checklist item, not a build gap:** V1 deliberately has no `/v1/admin/workers` REST
 surface (P9-A, RULED — Phase 9 §5.4a). Worker lifecycle is an out-of-band operator procedure using
@@ -154,6 +196,8 @@ surface (P9-A, RULED — Phase 9 §5.4a). Worker lifecycle is an out-of-band ope
 ---
 
 ## 6. Decide when to promote auto-quarantine — and auto-pause — from `shadow` to `enforce`
+
+> **Status: ⏳ owner-only, and deliberately post-launch** — it needs an observation window of real traffic, so it cannot be done before there is any. The mechanism is done: [ADR-0014](./adr/0014-every-autonomous-mutator-gets-a-shadow-ladder.md), with both ladders driven live in Stage 10 steps 3–4 (`6d773ba`).
 
 > **Since `send_managed_0026` (fix-plan item 13) this section covers TWO dials.** `autopause_mode`
 > joined `autoquarantine_mode` on the same `off`/`shadow`/`enforce` ladder, seeded `shadow` for the same
@@ -201,6 +245,8 @@ what happens to a REAL account (it starts getting quarantined), not just what th
 
 ## 7. Confirm accounts are pre-warmed (no ramp logic in V1)
 
+> **Status: ⏳ owner-only.** Needs real mailboxes on real sending domains. The module has no ramp logic by design ([`future-work.md`](./future-work.md) §1).
+
 **Why it blocks:** the module has NO built-in warm-up/ramp mechanism for a newly-added SMTP
 account — `daily_limit` applies at its full configured value from the account's very first day.
 A brand-new account added to a shared pool inherits `daily_limit_default` and will be routed up to
@@ -226,6 +272,8 @@ reactive handling is not a substitute for a sensible warm-up plan on the operato
 
 ## 8. Back up the master key, and run the recovery drill (REQUIRED — the one unrecoverable loss)
 
+> **Status: ⏳ owner-only.** Needs the real key and real off-host storage. The restore drill itself is proven on the dev stack **by a decrypt, not a clean boot** (Stage 11 step 1, `d158119`), and rotation in both directions (`ff83bac`).
+
 **Why it blocks:** SMTP credentials are encrypted with a key held **outside** the database. A DB
 backup restores ciphertext and nothing else. Lose the key and **every SMTP credential is permanently
 unrecoverable** — recovery is a manual password reset at each provider, for every account. There is
@@ -235,19 +283,21 @@ can rescue the plaintext.
 **Action:** work through [`operator-runbook.md`](./operator-runbook.md#disaster-recovery-key-backup-and-rotation) §1 before the **first real
 credential is entered** — not before launch, before the first `smtp_secret`. Specifically:
 
-- [ ] The key is backed up **off-host**, encrypted, in at least two independent locations, with the
+- ⏳ The key is backed up **off-host**, encrypted, in at least two independent locations, with the
       passphrase held separately.
-- [ ] The `CREDENTIAL_KEY_ID` **pairing** is recorded with the backup (a restore under the wrong
+- ⏳ The `CREDENTIAL_KEY_ID` **pairing** is recorded with the backup (a restore under the wrong
       label fails AAD authentication).
-- [ ] The "where the backup lives / who can reach it" table is **filled in**. An unfilled table is
+- ⏳ The "where the backup lives / who can reach it" table is **filled in**. An unfilled table is
       the same as no backup.
-- [ ] The **recovery drill has been run** on staging and reached a completed send. A clean Control
+- ⏳ The **recovery drill has been run** on staging and reached a completed send. A clean Control
       startup proves only that the key is 32 bytes — it does **not** prove the key is right. Only a
       decrypt proves a restore.
 
 ---
 
 ## 9. Re-check the module vulnerabilities (was blocking — cleared 2026-11-07; re-run before a pilot)
+
+> **Status: ✅ cleared 2026-11-07 (`4640dfb`) · ⏳ re-run on pilot day.** Only a run on the day can say the advisory database is still clean.
 
 **Status:** `GO-2026-5004` (`pgx/v5`) and `GO-2026-5970` (`golang.org/x/text`) were cleared on 2026-11-07
 by moving the builder to `golang:1.26-alpine` (go1.26.10) and bumping `pgx` to v5.10.0 and `x/text` to
@@ -264,26 +314,28 @@ not mean clean on the day a pilot carries real data.
 
 ## 10. Wire monitoring, and know that the webhook needs a poller
 
+> **Status: ⏳ owner-only.** Your uptime monitor, scheduled poll, webhook receiver and log shipping. The mechanism is proven: all three alert conditions fire and are cross-checked against the health snapshot (Stage 10 steps 6–7, `bfb3910`).
+
 **Why it blocks:** alert conditions are evaluated **when `GET /v1/admin/health` is called**, not by a
 background scanner. **With nothing polling it, no webhook ever fires** — alerting is silently inert.
 This is the single most missable operational fact in the system.
 
 **Action:** [`operator-runbook.md`](./operator-runbook.md#monitoring-and-alerting).
 
-- [ ] Uptime monitor points at **`/readyz`** (not `/healthz`, which stays green while nothing is
+- ⏳ Uptime monitor points at **`/readyz`** (not `/healthz`, which stays green while nothing is
       dispatching), alerting after two consecutive failures.
-- [ ] A scheduled health poll exists (the cron entry in `operator-runbook.md#monitoring-and-alerting` §3). This is what makes the
+- ⏳ A scheduled health poll exists (the cron entry in `operator-runbook.md#monitoring-and-alerting` §3). This is what makes the
       webhook work.
-- [ ] `alert_webhook_url` is set, and a test alert has actually been **received** — not just
+- ⏳ `alert_webhook_url` is set, and a test alert has actually been **received** — not just
       configured. Note `SEND_MANAGED_ALERT_WEBHOOK_URL` in `.env.example` is **inert**; the config row is
       the only source.
-- [ ] Logs are shipped somewhere with retention. The internal `reason=` behind a client error
+- ⏳ Logs are shipped somewhere with retention. The internal `reason=` behind a client error
       envelope exists **only** in the Control's log; without retention, a reported error is a code and
       a request id with nothing behind them. **This is also your only record of config changes** —
       there is no `config_events` table, so a `PUT /v1/admin/config` leaves a process-log line and
       nothing else. Retention here is an audit control, not just an ops convenience
       ([`security-posture.md`](./security-posture.md) §3.6).
-- [ ] `alert_webhook_url` points where you intend. It is validated for scheme prefix only — a private
+- ⏳ `alert_webhook_url` points where you intend. It is validated for scheme prefix only — a private
       or link-local address is accepted and will be POSTed to from inside the trust boundary
       ([`security-posture.md`](./security-posture.md) §3.14).
 
@@ -291,11 +343,13 @@ This is the single most missable operational fact in the system.
 
 ## 11. Run the real-provider smoke test (the first live send)
 
+> **Status: ⏳ owner-only.** Real provider, real sending reputation. The procedure is written (below) and deliberately **not run**.
+
 **Why it blocks:** every test up to this point sends into a local sink. The first contact with a real
 provider touches **real sending reputation**, and a bad first impression is not a test failure you
 re-run.
 
-**Action:** [`go-live-checklist.md`](./go-live-checklist.md#real-provider-smoke-test-the-first-live-send), start to finish, in that
+**Action:** the [real-provider smoke test](#real-provider-smoke-test-the-first-live-send) below, start to finish, in that
 order — one message to yourself, then a second provider, then the deliberate failure-handling checks,
 then a small real batch. It is written to be small, to addresses you control, and reversible. Item 8
 (key backup **and** drill) is a prerequisite of this item, not a follow-up.
@@ -303,6 +357,8 @@ then a small real batch. It is written to be small, to addresses you control, an
 ---
 
 ## 12. Promote `retention_mode` to `enforce` (REQUIRED — `send_logs` grows without bound until you do)
+
+> **Status: ⏳ owner-only.** A required config flip on the real deployment. The mechanism is done: `send_managed_0026` / [ADR-0014](./adr/0014-every-autonomous-mutator-gets-a-shadow-ladder.md) (`c300fe6`); the sweep is asserted never to touch anything but `send_logs`.
 
 **Why it blocks:** `send_managed_0026` (fix-plan item 13) seeds `retention_mode` at `shadow`, which
 means **the retention sweep deletes nothing**. It counts what it would drop and logs it; the rows stay.
@@ -380,33 +436,40 @@ recipient-domain distribution and `smtp_response` text (the accepted V1 cost, Ph
 
 ## Final pre-flight (run immediately before flipping live traffic on)
 
-- [ ] `scripts/dev.sh test` (or the prod-equivalent harness invocation) is green — full behavioral
-      suite against the ACTUAL deployed images, not a stale build.
-- [ ] All 15 CI gates green: `config_drift`, `contract_drift`, `migration_lint`,
+Status per row: ✅ done with evidence · ⏳ owner-only, at the moment of go-live. The only row that can be ✅ now is PF-2;
+the rest describe the deployed system, which does not exist yet.
+
+- ⏳ **PF-1** `scripts/dev.sh test` (or the prod-equivalent harness invocation) is green — full behavioral
+      suite against the ACTUAL deployed images, not a stale build. *Repository side done:* 62 passed, 0 failed
+      on a runner (run 42633655325). *Left for you:* running it against the images you actually deploy.
+- ✅ **PF-2** All 15 CI gates green (run 42633655325: every one passed; `test_enumeration` prints the live
+      count on each run — re-read the run after any later push): `config_drift`, `contract_drift`, `migration_lint`,
       `config_consumption`, `config_consumption_selftest`, `no_secret_leak`, `drain_grace`,
       `test_enumeration`, `test_enumeration_selftest`, `dsn_scrub_wiring`, `postgres_durability`,
       `secret_ownership`, `go_suite_selftest`, `image_pins`, `image_pins_selftest` (re-derived from
       `tests/harness/checks/` on 2026-11-08; this line said 9 while 15 are wired). (The `_selftest` gates are paired controls:
       each deliberately breaks the gate it names and fails if that gate stays green, so a gate cannot
       quietly stop checking anything.)
-- [ ] The deployment's SIGTERM grace clears `shutdown_drain_timeout_sec` — `stop_grace_period` if
+- ⏳ **PF-3** The deployment's SIGTERM grace clears `shutdown_drain_timeout_sec` — `stop_grace_period` if
       you run under Compose, `TimeoutStopSec` if you run under systemd, and **both** if the unit
       wraps a compose file (the shorter of the two wins). `drain_grace` checks the committed dev
       file and the documented unit; it cannot see YOUR prod file, so confirm this one by hand.
       Getting it wrong is not unsafe — leave-in-place invents nothing — but it turns every clean
-      shutdown into reclaim work and exits 137.
-- [ ] `GET /readyz` reports `db:true, singleton_lock:true`.
-- [ ] `GET /v1/admin/health` shows the expected pool(s) with non-`exhausted` headroom and
+      shutdown into reclaim work and exits 137. *Repository side done:* `drain_grace OK: drain 30s < docker
+      stop_grace_period 90s and systemd TimeoutStopSec=120` (run 42633655325); the open part is your prod file.
+- ⏳ **PF-4** `GET /readyz` reports `db:true, singleton_lock:true`. *(Proven on the dev stack, incl. the
+      lock-loss path — Stage 11 step 6, `e7f92a6`; on the deployed Control it is yours to read.)*
+- ⏳ **PF-5** `GET /v1/admin/health` shows the expected pool(s) with non-`exhausted` headroom and
       `dispatch_paused:false`.
-- [ ] Items 1–5, 7–11 and **12** above are done; item 6 is deliberately deferred to a post-launch
+- ⏳ **PF-6** Items 1–5, 7–11 and **12** above are done; item 6 is deliberately deferred to a post-launch
       observation window, per its own section. Item 12 (`retention_mode=enforce`) is NOT deferrable
       the way item 6 is: until it is promoted, `send_logs` accumulates recipient addresses and message
       bodies with no bound and the retention promise in `security-posture.md` is not being kept. If you
       are flipping live traffic on with `retention_mode` still at `shadow`, that is a decision someone
       has to have made on purpose, not a box left unchecked.
-- [ ] The master key backup **and drill** (item 8) are done. This is the one item on this page whose
+- ⏳ **PF-7** The master key backup **and drill** (item 8) are done. This is the one item on this page whose
       omission cannot be corrected after the fact.
-- [ ] You have read [`future-work.md`](./future-work.md) and accept the V1 limits it records —
+- ⏳ **PF-8** You have read [`future-work.md`](./future-work.md) and accept the V1 limits it records —
       particularly that there is **no bounce or complaint data**, so provider-side monitoring is your
       only deliverability feedback loop.
 
@@ -414,7 +477,7 @@ recipient-domain distribution and `smtp_response` text (the accepted V1 cost, Ph
 
 ## Real-provider smoke test (the first live send)
 
-> **STATUS: WRITTEN, NOT RUN.** Deliberately. Every test in this repo up to now sends into
+> **STATUS: ⏳ WRITTEN, NOT RUN — owner-only.** Deliberately. Every test in this repo up to now sends into
 > [Mailpit](http://localhost:8025), a local sink — nothing has ever left a machine. This procedure is
 > the system's first contact with a real SMTP provider and a real inbox, and it touches **real
 > sending reputation**. Running it is **step one of the pilot**, not part of the build. Do not run it
@@ -434,22 +497,22 @@ and [`api-contract.md`](./api-contract.md).
 
 Do not start until all of these are true.
 
-- [ ] The install guide has been completed end to end and a **Mailpit** send has succeeded.
+- ⏳ The install guide has been completed end to end and a **Mailpit** send has succeeded.
       [`install-and-deploy.md`](./install-and-deploy.md). If it has not sent to a sink, it is not
       ready to send to a provider.
-- [ ] The master key is **backed up off-host and the recovery drill has been run**.
+- ⏳ The master key is **backed up off-host and the recovery drill has been run**.
       [`operator-runbook.md`](./operator-runbook.md#disaster-recovery-key-backup-and-rotation) §1. You are about to enter a real credential;
       do not enter one into a system whose key you cannot restore.
-- [ ] `jq` is installed, and you can read `GET /v1/admin/health`.
+- ⏳ `jq` is installed, and you can read `GET /v1/admin/health`.
       [`operator-runbook.md`](./operator-runbook.md).
-- [ ] You have a **dedicated throwaway or low-stakes sending account** at the provider — not the
+- ⏳ You have a **dedicated throwaway or low-stakes sending account** at the provider — not the
       company's primary mailbox.
-- [ ] You have **two recipient addresses you control**, at *different* providers (e.g. one Gmail, one
+- ⏳ You have **two recipient addresses you control**, at *different* providers (e.g. one Gmail, one
       Outlook). Different providers is the point: it is how you learn whether you landed in inbox or
       spam.
-- [ ] You know the provider's real per-mailbox daily and per-hour limits, and the account's SPF/DKIM
+- ⏳ You know the provider's real per-mailbox daily and per-hour limits, and the account's SPF/DKIM
       state for the sending domain.
-- [ ] Someone other than you knows you are doing this, and when.
+- ⏳ Someone other than you knows you are doing this, and when.
 
 **Never** point a first smoke test at a purchased list, a customer list, or any address you do not
 personally control. One hard bounce from a guessed address is a worse outcome than any information
@@ -606,18 +669,18 @@ Using it costs nothing.
 
 ### 5. After the test
 
-- [ ] Restore `daily_limit` to its intended production value.
-- [ ] Confirm the account is not left paused or quarantined from step 5:
+- ⏳ Restore `daily_limit` to its intended production value.
+- ⏳ Confirm the account is not left paused or quarantined from step 5:
       `ahealth | jq '{accounts, pools}'`.
-- [ ] Confirm the correct credential is in place (step 5.1) — re-`PATCH` if there is any doubt, and
+- ⏳ Confirm the correct credential is in place (step 5.1) — re-`PATCH` if there is any doubt, and
       prove it with one more successful send.
-- [ ] Diff against the recorded baseline — same filter as the capture in §2, or the diff is noise:
+- ⏳ Diff against the recorded baseline — same filter as the capture in §2, or the diff is noise:
       `diff /tmp/smoke-before.json <(ahealth | jq -S '{accounts, pools}')` (expect only the intended
       new account and its pool).
-- [ ] Review `send_managed.account_events` for the account — every lifecycle change during the test is
+- ⏳ Review `send_managed.account_events` for the account — every lifecycle change during the test is
       recorded there, and it is the honest log of what happened.
-- [ ] Record the result: date, provider, ports used, inbox-vs-spam per receiver, anything surprising.
+- ⏳ Record the result: date, provider, ports used, inbox-vs-spam per receiver, anything surprising.
       Append it here or alongside [`operator-runbook.md`](./operator-runbook.md#measured-throughput-ceiling-e11-load-test); a first-contact
       result that nobody wrote down has to be re-earned.
-- [ ] Work through [`go-live-checklist.md`](./go-live-checklist.md) before widening beyond addresses
+- ⏳ Work through the checklist above before widening beyond addresses
       you control.

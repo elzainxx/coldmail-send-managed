@@ -31,11 +31,11 @@ The ⏳ items are also collected, with why only the owner can do them, in the ow
 | # | Item | Status | Evidence — or what only you can do |
 |---|---|---|---|
 | 1 | Set `default_shared_pool_id` | ⏳ | Needs the real pool and real accounts on the live deployment. Mechanism proven: `tests/harness/phase3_send.sh` sets it and delivers end to end through a real worker (SUITE 9, run 42633655325). |
-| 2 | Confirm the real `public.users` / `public.job_items` shapes | ⏳ | Needs the real platform schema. The pre-flight (`db/preflight/check_platform_tables.sql`) checks existence only, by design; the assumed shape is recorded in [ADR-0007](./adr/0007-assumed-platform-table-shapes.md). |
+| 2 | Confirm the real `public.users` / `public.job_items` shapes | ⏳ | Needs the real platform schema. The pre-flight (`db/preflight/check_platform_tables.sql`) checks existence only, by design; the assumed shape is recorded in [ADR-0007](./adr/ADR-0007-assumed-platform-table-shapes.md). |
 | 3 | Advisory-lock band and migration admin credential | ⏳ | Needs platform-side confirmation. The band is registered in [architecture](./architecture.md#advisory-lock-key-registry) (OD-10). |
-| 4 | KMS/IAM separation — platform roles hold no Decrypt | ⏳ | Needs the real cloud IAM policy; **no automated re-check exists**. The code-level half is done: [ADR-0006](./adr/0006-brain-sole-decryptor.md), and SUITE 5 proves the worker container cannot read key material (run 42633655325). |
+| 4 | KMS/IAM separation — platform roles hold no Decrypt | ⏳ | Needs the real cloud IAM policy; **no automated re-check exists**. The code-level half is done: [ADR-0006](./adr/ADR-0006-brain-sole-decryptor.md), and SUITE 5 proves the worker container cannot read key material (run 42633655325). |
 | 5 | Provision workers out-of-band | ⏳ | Needs the real worker hosts. Procedure proven on the dev stack: add and remove a worker (Stage 11 steps 3–4, `b103980`); a revoked worker is refused on its next connect. |
-| 6 | Promote auto-quarantine / auto-pause to `enforce` | ⏳ | **Deliberately post-launch**, after an observation window of real traffic — it cannot be done before there is traffic. Mechanism: [ADR-0014](./adr/0014-every-autonomous-mutator-gets-a-shadow-ladder.md); both ladders driven live in Stage 10 steps 3–4 (`6d773ba`). |
+| 6 | Promote auto-quarantine / auto-pause to `enforce` | ⏳ | **Deliberately post-launch**, after an observation window of real traffic — it cannot be done before there is traffic. Mechanism: [ADR-0014](./adr/ADR-0014-every-autonomous-mutator-gets-a-shadow-ladder.md); both ladders driven live in Stage 10 steps 3–4 (`6d773ba`). |
 | 7 | Accounts are pre-warmed | ⏳ | Needs real mailboxes on real domains with real reputation. The module has no ramp logic by design ([future-work §1](./future-work.md)). |
 | 8 | Back up the master key and run the recovery drill | ⏳ | Needs the real key and real off-host storage — the one unrecoverable loss. The restore drill is proven on the dev stack **by a decrypt, not a clean boot** (Stage 11 step 1, `d158119`), and rotation both ways (`ff83bac`). |
 | 9 | Module vulnerabilities | ✅ cleared 2026-11-07 · ⏳ re-run on pilot day | `GO-2026-5004` / `-5970` cleared by moving the builder to `golang:1.26-alpine` (`4640dfb`): `govulncheck` 0 live call paths in all four Go modules. The advisory database moves, so only a run on the day can say it is still clean. |
@@ -89,7 +89,7 @@ sees) — it does not fail loudly, which means it is easy to forget.
 
 ## 2. Confirm the real `public.users` / `public.job_items` column shapes (G3 / OD-8)
 
-> **Status: ⏳ owner-only.** Needs the real platform schema, which this repository cannot see. Pre-flight checks existence only, by design; the assumed shape is [ADR-0007](./adr/0007-assumed-platform-table-shapes.md).
+> **Status: ⏳ owner-only.** Needs the real platform schema, which this repository cannot see. Pre-flight checks existence only, by design; the assumed shape is [ADR-0007](./adr/ADR-0007-assumed-platform-table-shapes.md).
 
 **Why it blocks:** the module's pre-flight (`db/preflight/check_platform_tables.sql`) checks table
 **existence only**, deliberately (a column-level check would false-fail every time the platform
@@ -133,7 +133,7 @@ infrastructure.
 
 ## 4. Verify KMS/IAM separation — platform roles must NOT hold Decrypt (G4 / S15)
 
-> **Status: ⏳ owner-only.** The cloud IAM grant is not code-checkable and has no automated re-check. The code-level half is done: [ADR-0006](./adr/0006-brain-sole-decryptor.md) (the `Decrypt` capability is wired only into `internal/dispatch`), and SUITE 5 proves the worker container cannot read key material (CI run 42633655325).
+> **Status: ⏳ owner-only.** The cloud IAM grant is not code-checkable and has no automated re-check. The code-level half is done: [ADR-0006](./adr/ADR-0006-brain-sole-decryptor.md) (the `Decrypt` capability is wired only into `internal/dispatch`), and SUITE 5 proves the worker container cannot read key material (CI run 42633655325).
 
 **Why it blocks:** this is CLAUDE.md Rule 6's load-bearing security property — "Control is the SOLE
 decryptor. KMS Decrypt is Control-only. The platform and operators hold NO Decrypt capability." It
@@ -197,7 +197,7 @@ surface (P9-A, RULED — Phase 9 §5.4a). Worker lifecycle is an out-of-band ope
 
 ## 6. Decide when to promote auto-quarantine — and auto-pause — from `shadow` to `enforce`
 
-> **Status: ⏳ owner-only, and deliberately post-launch** — it needs an observation window of real traffic, so it cannot be done before there is any. The mechanism is done: [ADR-0014](./adr/0014-every-autonomous-mutator-gets-a-shadow-ladder.md), with both ladders driven live in Stage 10 steps 3–4 (`6d773ba`).
+> **Status: ⏳ owner-only, and deliberately post-launch** — it needs an observation window of real traffic, so it cannot be done before there is any. The mechanism is done: [ADR-0014](./adr/ADR-0014-every-autonomous-mutator-gets-a-shadow-ladder.md), with both ladders driven live in Stage 10 steps 3–4 (`6d773ba`).
 
 > **Since `send_managed_0026` (fix-plan item 13) this section covers TWO dials.** `autopause_mode`
 > joined `autoquarantine_mode` on the same `off`/`shadow`/`enforce` ladder, seeded `shadow` for the same
@@ -358,7 +358,7 @@ then a small real batch. It is written to be small, to addresses you control, an
 
 ## 12. Promote `retention_mode` to `enforce` (REQUIRED — `send_logs` grows without bound until you do)
 
-> **Status: ⏳ owner-only.** A required config flip on the real deployment. The mechanism is done: `send_managed_0026` / [ADR-0014](./adr/0014-every-autonomous-mutator-gets-a-shadow-ladder.md) (`c300fe6`); the sweep is asserted never to touch anything but `send_logs`.
+> **Status: ⏳ owner-only.** A required config flip on the real deployment. The mechanism is done: `send_managed_0026` / [ADR-0014](./adr/ADR-0014-every-autonomous-mutator-gets-a-shadow-ladder.md) (`c300fe6`); the sweep is asserted never to touch anything but `send_logs`.
 
 **Why it blocks:** `send_managed_0026` (fix-plan item 13) seeds `retention_mode` at `shadow`, which
 means **the retention sweep deletes nothing**. It counts what it would drop and logs it; the rows stay.

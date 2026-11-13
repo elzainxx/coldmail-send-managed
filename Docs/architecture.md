@@ -174,10 +174,10 @@ Deferred work is registered in [`future-work.md`](./future-work.md) rather than 
 **Open Decisions: zero open.** Every decision raised across phases 0–10 and since the fork is ruled and
 closed, and the rulings in force are listed in [`open-decisions.md`](./open-decisions.md). Two of them
 shaped this document: **G11-OD-1** option B (a Control that loses the singleton lock **pauses** dispatch
-and re-acquires on a bounded retry rather than exiting — [ADR-0011](./adr/0011-singleton-lock-loss-does-not-stop-dispatch.md))
+and re-acquires on a bounded retry rather than exiting — [ADR-0011](./adr/ADR-0011-singleton-lock-loss-does-not-stop-dispatch.md))
 and **G12-OD-1** option A (an FK-aware per-column carve-out on `job_events`' append-only trigger,
 restoring the documented hard delete — `send_managed_0024`,
-[ADR-0012](./adr/0012-job-events-set-null-fks-collide-with-append-only-trigger.md)). R2-5 (a stale example
+[ADR-0012](./adr/ADR-0012-job-events-set-null-fks-collide-with-append-only-trigger.md)). R2-5 (a stale example
 inside a locked spec) was ruled 2026-08-07: annotate, do not rewrite. The evidence this verdict rests
 on — which phase verified what, and what each review gate found — is in
 `history/phase-build-record.md`'s "BUILD COMPLETE" section; it is provenance, not something you need in

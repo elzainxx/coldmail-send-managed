@@ -17,7 +17,9 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
   row in `send_managed.config` with a documented `default_value` and a `value_type` hint.
   Values are JSONB-wrapped `{"v": ...}`. There are NO hardcoded tuning constants in
   Go, Node, or SQL. A literal that governs runtime behavior is a bug.
-- `default_value` is never mutated. Phase 9 §4 is the authoritative 50-key reference.
+- `default_value` is never mutated. Phase 9 §4 is the authoritative 50-key reference. (2026-11-09: the
+  living reference is now `Docs/config-reference.md`, currently 57 keys — the `config_drift` gate, not a
+  count written in prose, is what keeps it exact.)
 - New tunable => new seeded config key in a migration + an entry in the Phase 9 §4
   reference in the same change. No key, no constant.
 - TWO config-ordering INVARIANTS are enforced at config-load, not assumed:
@@ -33,8 +35,8 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
 
 ## 2. Flag, don't silently fix
 - Contradictions, ambiguities, and locked-fact conflicts are NOT resolved by
-  inventing an answer. Record them in the Open Decisions log (`Docs/history/open-decisions.md`
-  + an ADR in `Docs/adr/`) and await the user's ruling.
+  inventing an answer. Record them in the Open Decisions log (`Docs/open-decisions.md` — the living
+  ledger; `Docs/history/open-decisions.md` is the frozen phase-0–10 predecessor — + an ADR in `Docs/adr/`) and await the user's ruling.
 - Never resolve a locked contradiction on your own authority. "Locked" means locked.
 - An Open Decision blocks only the ambiguous slice; keep unrelated work moving.
 

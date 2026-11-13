@@ -112,7 +112,7 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 
 	// Config-ordering invariants (P9-OD-2, RULED-AND-CLOSED): validate the RESULTING pair against
 	// the counterpart key's LIVE current value — not the submitted value in isolation — BEFORE the
-	// write lands. No-op for the 51 of 53 keys with no ordering counterpart. Reads through tx, so
+	// write lands. No-op for every key with no ordering counterpart. Reads through tx, so
 	// the counterpart value it sees cannot be changed by a concurrent PUT before this one commits.
 	if row.ValueType == "integer" {
 		if n, ok := asInt(req.Value); ok {

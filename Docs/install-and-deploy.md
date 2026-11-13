@@ -1017,7 +1017,7 @@ Read these first; they will each cost you an hour otherwise.
 3. `docker compose ... ps -a` — confirm every container is up and **nothing has exited**. Use `-a`: a plain `ps` omits exited containers, which is exactly how a dead worker hides.
 4. Confirm both workers registered: `SELECT id, status FROM send_managed.boxes` shows **two** `active` rows, and the Control logged `worker registered id=...` exactly twice with no `stream closed` churn
 5. Open the Mailpit UI; confirm it is reachable and empty
-6. Connect with `psql`; confirm the `send_managed` schema exists (owner `send_managed_owner`) and `send_managed.config` holds **53** rows
+6. Connect with `psql`; confirm the `send_managed` schema exists (owner `send_managed_owner`) and `send_managed.config` holds **57** rows
 
 **Pass:** every container up and stable, both workers `active`, Mailpit empty, schema present.
 
@@ -1059,12 +1059,12 @@ Read these first; they will each cost you an hour otherwise.
 > **Start from `scripts/dev.sh reset`**, and confirm postgres' age (`docker ps`) afterwards. A
 > postgres container younger than the harness run means something recreated it mid-run.
 
-1. `scripts/dev.sh test` — the full harness (**58** checks; the count is `ok()`+`bad()` in
-   `tests/harness/run.sh`, printed as the `HARNESS RESULT` line. This said 53 until 2026-07-29 —
+1. `scripts/dev.sh test` — the full harness (**62** checks at `96a189f` — CI run 42633655325; the count is `ok()`+`bad()` in
+   `tests/harness/run.sh`, printed as the `HARNESS RESULT` line. It has moved before (53, then 58, now 62) —
    don't take the number on faith, read the line the run prints)
 2. Run the Go suites directly. `cd services/control && go test ./...` covers all of them at once — dispatch, adminapi, platformapi, credential, workerlink, workerproto — which is safer than naming them, since a named list silently misses a new package.
-3. Run the worker Node suite (`cd services/worker && node --test "test/*.test.mjs"` — **78** tests)
-4. Run all 6 CI gates locally: `migration_lint`, `config_drift`, `no_secret_leak`, `contract_drift`, `config_consumption`, `drain_grace`
+3. Run the worker Node suite (`cd services/worker && node --test "test/*.test.mjs"` — **80** tests at `96a189f`, CI run 42633655325)
+4. Run the gate scripts in `tests/harness/checks/` — 15 at `96a189f` (11 gates and 4 paired self-tests; `test_enumeration` prints the live count and fails if any is not wired into `.github/workflows/real-infra.yml`). The ones that need no running stack — `test_enumeration`, `image_pins`, `go_suite_selftest` and the three `_selftest` scripts — run anywhere with bash; the rest read the live dev stack
 5. `gofmt` / `go vet` clean
 
 **Pass:** every suite green, every gate green, **zero skipped tests**. A skip here is a test you think you have and don't.
@@ -1195,7 +1195,7 @@ Do this by hand through the API, not through a script. You are testing whether t
 
 #### Stage 6 — Config surface and invariants
 
-1. Read all **53** config keys
+1. Read all **57** config keys
 2. Change one with an observable effect (the pacing delay is easiest to see)
    - **Pass:** takes effect without a redeploy
 3. `PUT` `smtp_operation_timeout_sec` **higher** than `job_max_processing_time_sec`
@@ -2376,7 +2376,9 @@ Those belong to the first real-provider smoke test and the pilot. Local testing 
 
 ### 7.5 Pre-deploy sign-off
 
-Do not deploy until every line is true.
+Do not deploy until every line is true. Every line below is **✅ done** — each carries its own evidence — and the figures inside
+them are **as measured on the date of that stage** (2026-07-29: 58 harness checks, 6 gates, 53 config keys, 78 worker tests). The
+current figures are 62 / 15 / 57 / 80 (CI run 42633655325, commit `96a189f`); re-walk a stage rather than trusting an old number.
 
 - [x] Full harness green from a clean slate, zero skips *(Stage 1; `58 passed, 0 failed` from `scripts/dev.sh reset` — `bc9b74e`. The first run reported `35 passed, 23 failed`, which was **two** root causes, not 23. (1) `send_managed_0022` was added without extending `TestRunnerLifecycle`'s `wantChain`; fixed, plus the anti-vacuity assertions the other migrations carry — 0022 is `CREATE OR REPLACE` of two existing function **bodies**, so no column/index/config check can see it, and its `sending→sent` = not-an-error DECISION is now asserted, proven both directions. (2) The 21-failure cascade in the live suites was ONE empty variable: `$DC up -d worker` without `--no-deps` recreated the tmpfs postgres and wiped the DB out from under the live Control mid-suite. `migration_lint` now blocks a new migration that is absent from `wantChain` — nothing caught 0022 because the chain on disk was contiguous, so the gate passed while the suite failed. **Zero skips confirmed by reading them**, not by an absent-SKIP grep: the only `SKIP` string in the log is a test NAME (`TestVariation_CSSSkipBelowPxZeroSurvivesJSONRoundTrip`), and postgres started once at 07:13:37 and was never recreated across the 07:13→07:19 run)*
 - [x] Both workers `active` after a reset, each registered exactly once (no eviction churn) *(Stage 1; from `dev.sh reset` + `up2`: two `active` rows with non-null `registered_at`, `worker registered id=` exactly **once** per worker id, and **zero** `stream closed`/evict lines. Verified from a FRESH reset deliberately — a check run right after the harness shows worker 1 registering **twice**, which is correct and not churn: `phase3_send.sh` T3 kills the worker on purpose to prove no outcome can be invented, then restarts it. Counting registrations on a post-harness stack would have failed this line for the wrong reason)*

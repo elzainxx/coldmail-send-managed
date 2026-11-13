@@ -977,7 +977,7 @@ The signature of a healthy system: `dispatch_paused` false, `sends_last_window` 
 
 | Field | Healthy | Warrants action |
 |---|---|---|
-| `dispatch.dispatch_paused` | `false` | `true` — the panic switch is on. [Step 2](#step-2--is-dispatch-switched-off). |
+| `dispatch.dispatch_paused` | `false` | `true` — the panic switch is on. [Step 2](#step-2--is-dispatch-switched-off-and-at-which-rung). |
 | `dispatch.ticks_per_min` | Non-zero while there is work | 0 with a non-empty queue → dispatch is not claiming. Note this is an **observed-throughput approximation** derived from claim events, not a true tick counter: a tick that claims nothing is invisible here, so 0 with an *empty* queue is normal. |
 | `dispatch.sends_last_window` / `send_rate_per_min` | Tracks your expected volume | 0 with a non-empty queue → the flagship tree. Falling steadily → capacity or pacing; check accounts and pools. |
 | `queue.queued` | Non-zero is fine; it should **drain** | Growing monotonically while `sends_last_window` is 0. A large but shrinking queue is a working system with a backlog. |
@@ -1082,7 +1082,7 @@ failures so a 5s self-healing blip does not page anyone.
 
 The Control's log is quiet by design: it is **event-driven, not periodic**. A fully idle Control with an
 empty queue writes *nothing* — no per-tick heartbeat lines. So if the log is silent, that is not a
-stuck logger; it means nothing happened. A full behavioral test run (53 tests) produces ~40 lines
+stuck logger; it means nothing happened. A full behavioral test run (measured at 53 checks; it is 62 now) produces ~40 lines
 total. Consequently, **any line that appears is worth reading** — and a burst of them is itself a
 signal.
 

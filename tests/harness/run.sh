@@ -383,8 +383,8 @@ hr; echo "SUITE 7: worker unit tests (real local sink / real stream; credential 
 # Matches every *.test.mjs by GLOB rather than hand-listing files, so a new worker unit test cannot be
 # silently left out of CI (buffer.test.mjs was added in Phase 7 Chunk 2b and this is what wires it
 # in). The SHELL expands the glob, NOT node: this used to pass the pattern quoted so that node would
-# expand it, which only works on Node >= 21. On Node 20 (the worker image's own runtime, and what the
-# CI replica runs) the quoted pattern is looked up as a literal file name, nothing runs, and this suite
+# expand it, which only works on Node >= 21. On Node 20 (the runtime the worker image used before it moved to Node 24, and what an older
+# CI replica may still carry) the quoted pattern is looked up as a literal file name, nothing runs, and this suite
 # reported "ZERO tests" — invisible on a dev host whose Node is newer. A bare `test/` directory arg is
 # no alternative: some Node versions treat it as a module and fail to resolve. Shell expansion works on
 # every version; if the glob matches nothing the literal pattern is passed through, node runs zero

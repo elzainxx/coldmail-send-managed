@@ -2,7 +2,7 @@
 # config_drift — BLOCKING CI gate. Asserts the live send_managed.config key set equals the
 # phase-aware manifest (Docs/config-manifest.txt) AND the config-reference.md table. This
 # structurally forbids a hardcoded tuning constant: a dial that isn't a seeded row with a
-# documented default cannot pass. Grows monotonically to 50 keys after send_managed_0021 (OD-6).
+# documented default cannot pass. Grows monotonically with every key-seeding migration (OD-6); the current total is in the header of Docs/config-manifest.txt.
 #
 # Phase 0 seeds ZERO config keys, so the expected set is empty. The gate still runs so the
 # discipline is live from day one (a stray seeded key, or a documented-but-unseeded key,

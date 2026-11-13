@@ -22,5 +22,8 @@
 # Living operational + reference docs.
 /Docs/                           @send_managed-arch
 
-# Provenance: locked phase specs, ADRs, decision ledger, build record. Archive — not edited.
+# ADRs (append-only: superseding writes a new ADR) and the LIVING decision ledger.
+/Docs/adr/                       @send_managed-arch
+/Docs/open-decisions.md           @send_managed-arch
+# Provenance: locked phase specs, the frozen phase-0–10 ledger, build record, merged-away docs. Archive — not edited.
 /Docs/history/                   @send_managed-arch

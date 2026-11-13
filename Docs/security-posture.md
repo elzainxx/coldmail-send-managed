@@ -330,22 +330,22 @@ into an unauthenticated uptime check. See [`operator-runbook.md`](./operator-run
 
 ## 5. What a reviewer should verify at deploy time
 
-The codebase cannot check these; they are the deployment's half of the posture.
+The codebase cannot check these; they are the deployment's half of the posture. Every row except the advisory one is **⏳ owner-only** — it describes the real deployment, which does not exist yet; the matching items in [`go-live-checklist.md`](./go-live-checklist.md) carry the evidence for the part the repository already proves.
 
-- [ ] KMS Decrypt is granted to the **Control role only** (§3.3). The platform, operators, and CI have none.
-- [ ] The master key is backed up off-host, encrypted, in two locations, and the **recovery drill has been run** ([`operator-runbook.md`](./operator-runbook.md#disaster-recovery-key-backup-and-rotation) §1).
-- [ ] No worker host has `DATABASE_URL`, any KMS variable, `ca.key`, or `control.key`. Presence is an incident, not a misconfiguration.
-- [ ] Workers have **no** public ingress; worker↔Control traffic is on a private network.
-- [ ] `ADMIN_API_KEY_HASHES` and `PLATFORM_TOKEN_HASHES` are **different** credentials, each rotatable, each held by the smallest possible set.
-- [ ] `send_managed` schema owner is `send_managed_owner` (non-login, non-superuser) and `send_managed.accounts` shows `relforcerowsecurity = t`.
-- [ ] `debug_log_retention_days` reflects a deliberate privacy decision (§3.2), not a default nobody looked at.
-- [ ] **`retention_mode` is `enforce`** (§3.2). Until it is, `debug_log_retention_days` is an intention and nothing is ever deleted — the sole privacy control on `send_logs` is not running. Verify the value, do not assume the default: `GET /v1/admin/config` and read it.
-- [ ] All three `off`/`shadow`/`enforce` dials are understood: `autoquarantine_mode`, `autopause_mode` and `retention_mode` all default to **shadow** — each logs the action it would take and takes none. Two of the three are safe to leave there; `retention_mode` is not (the row above).
-- [ ] The database's own at-rest encryption is enabled (the only control over `send_logs` content besides retention).
-- [ ] No account has a **private-range or link-local `smtp_host`** (§3.13) — certificate verification is skipped for those, so the credential would cross an unverified connection. `SELECT id, smtp_host FROM send_managed.accounts;` and eyeball it.
-- [ ] `alert_webhook_url` points where you think it does (§3.14) — the value is validated for scheme prefix only, and the Control will POST to a private or link-local address just as readily as to your alerting service.
-- [ ] Both Go module advisories are cleared (§3.16) — `go-live-checklist.md` item 9. Do this before a pilot carries real data.
-- [ ] Your **own** log stream has been grepped for a known account's password. The shipped `no_secret_leak.sh` gate reads `.env` and compares only the **dev worker token/hash** against the *dev compose* logs — against a production deployment it either aborts on the missing `.env` or prints `OK` having compared nothing. There is no production-ready credential-leak scan; write the grep yourself, or treat this worker as unchecked.
+- ⏳ KMS Decrypt is granted to the **Control role only** (§3.3). The platform, operators, and CI have none.
+- ⏳ The master key is backed up off-host, encrypted, in two locations, and the **recovery drill has been run** ([`operator-runbook.md`](./operator-runbook.md#disaster-recovery-key-backup-and-rotation) §1).
+- ⏳ No worker host has `DATABASE_URL`, any KMS variable, `ca.key`, or `control.key`. Presence is an incident, not a misconfiguration.
+- ⏳ Workers have **no** public ingress; worker↔Control traffic is on a private network.
+- ⏳ `ADMIN_API_KEY_HASHES` and `PLATFORM_TOKEN_HASHES` are **different** credentials, each rotatable, each held by the smallest possible set.
+- ⏳ `send_managed` schema owner is `send_managed_owner` (non-login, non-superuser) and `send_managed.accounts` shows `relforcerowsecurity = t`.
+- ⏳ `debug_log_retention_days` reflects a deliberate privacy decision (§3.2), not a default nobody looked at.
+- ⏳ **`retention_mode` is `enforce`** (§3.2). Until it is, `debug_log_retention_days` is an intention and nothing is ever deleted — the sole privacy control on `send_logs` is not running. Verify the value, do not assume the default: `GET /v1/admin/config` and read it.
+- ⏳ All three `off`/`shadow`/`enforce` dials are understood: `autoquarantine_mode`, `autopause_mode` and `retention_mode` all default to **shadow** — each logs the action it would take and takes none. Two of the three are safe to leave there; `retention_mode` is not (the row above).
+- ⏳ The database's own at-rest encryption is enabled (the only control over `send_logs` content besides retention).
+- ⏳ No account has a **private-range or link-local `smtp_host`** (§3.13) — certificate verification is skipped for those, so the credential would cross an unverified connection. `SELECT id, smtp_host FROM send_managed.accounts;` and eyeball it.
+- ⏳ `alert_webhook_url` points where you think it does (§3.14) — the value is validated for scheme prefix only, and the Control will POST to a private or link-local address just as readily as to your alerting service.
+- ✅ Both Go module advisories are cleared (§3.16) on 2026-11-07 (`4640dfb`), **⏳ re-run on pilot day** — `go-live-checklist.md` item 9. Do this before a pilot carries real data.
+- ⏳ Your **own** log stream has been grepped for a known account's password. The shipped `no_secret_leak.sh` gate reads `.env` and compares only the **dev worker token/hash** against the *dev compose* logs — against a production deployment it either aborts on the missing `.env` or prints `OK` having compared nothing. There is no production-ready credential-leak scan; write the grep yourself, or treat this worker as unchecked.
 
 ---
 

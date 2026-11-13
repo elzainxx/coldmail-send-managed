@@ -2,7 +2,7 @@
 # config_consumption_selftest — the PAIRED CONTROL for config_consumption.sh.
 #
 # WHY THIS EXISTS. config_consumption.sh is the gate that decides whether a seeded-but-unconsumed
-# config key may exist, and on the real tree it reports OK for all 54 keys — so every one of its
+# config key may exist, and on the real tree it reports OK for every key in the ledger — so every one of its
 # failure branches is unexercised there. A gate whose failure path never runs is a gate nobody has
 # checked: it could be broken to accept everything and the real tree would still print OK on every
 # run, forever.
@@ -113,7 +113,7 @@ expect() {
   echo "  ok: $name"
 }
 
-echo "config_consumption_selftest: exercising the failure branches the real 54-key ledger never reaches"
+echo "config_consumption_selftest: exercising the failure branches the real ledger never reaches"
 
 # 1. A real consumer in code. Without this case, a gate broken to reject everything passes 2-6.
 fixture 'selftest_key|FixtureDial' no 'package dispatch

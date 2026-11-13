@@ -13,6 +13,7 @@ all three module repositories).
 | Old path (as cited in frozen documents) | Now |
 |---|---|
 | `Docs/architecture-overview.md` | [`../architecture.md`](../architecture.md) |
+| `Docs/sender-module-local-test-guide.md` (the local test guide's name before it was `send-managed-local-test-guide.md`; cited by ADR-0011 and ADR-0012) | [`../install-and-deploy.md` Part 7](../install-and-deploy.md#part-7--developing-and-testing-locally) |
 | `Docs/decisions/NNNN-*.md` and `Docs/history/decisions/NNNN-*.md` (the ADRs) | [`../adr/`](../adr/) — same file names, 0000–0014 |
 
 ## Merged into a canonical document; the source is kept here

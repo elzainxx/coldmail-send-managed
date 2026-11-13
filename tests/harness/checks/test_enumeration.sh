@@ -23,7 +23,7 @@
 # same reasoning as the ADR-0008 grants invariant and config_consumption: turn a fact that must be
 # remembered into one that cannot be forgotten.
 #
-# THIS REPO IS CURRENTLY CLEAN on both rules (9 packages, 6 gates, all wired). That is the point of
+# THIS REPO IS CLEAN on both rules (it was 9 packages and 6 gates when this gate was added; the live count is printed on every pass). That is the point of
 # adding it now rather than after the next incident: the gate exists to keep a clean tree clean, and
 # its paired control (test_enumeration_selftest.sh) is what proves it would still bite if it weren't.
 #

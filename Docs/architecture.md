@@ -144,8 +144,8 @@ reserved namespace that guarantees no collision on the shared instance.
 > avoid the reserved `9_000_000_000–9_999_999_999` band above. `pg_advisory_lock` scoping is
 > per-database, so a collision only matters when both run against the same instance
 > concurrently — which they do here. Recorded in the pre-live gate list
-([`history/pre-live-gates.md`](./history/pre-live-gates.md)) and carried as item 3 of
-[`go-live-checklist.md`](./go-live-checklist.md).
+> ([`history/pre-live-gates.md`](./history/pre-live-gates.md)) and carried as item 3 of
+> [`go-live-checklist.md`](./go-live-checklist.md).
 
 ---
 
@@ -161,22 +161,27 @@ for 11 phases — `history/README.md` says why; documents merged into the living
 ## Build status and the two ceilings
 
 **The build is complete and sealed.** All eleven phases are implemented, tested against real
-infrastructure, and closed; the verdict is **GO** for a pilot. The full behavioral harness is green
-and all **six** CI gates pass (`config_drift`, `contract_drift`, `migration_lint`,
-`config_consumption`, `drain_grace`, `no_secret_leak` — this said "five" until 2026-07-29; the sixth
-has been in `.github/workflows/real-infra.yml` since it was added). Deferred work is registered in
-`future-work.md` rather than left implicit.
+infrastructure, and closed; the verdict is **GO** for a pilot. On the last verified GitHub Actions run
+([42633655325](https://github.com/elzainxx/coldmail-send-managed/actions/runs/42633655325), commit
+`96a189f`) the behavioral harness reports `62 passed, 0 failed` and **15 gate scripts** pass — 11 gates
+(`config_drift`, `contract_drift`, `migration_lint`, `config_consumption`, `drain_grace`,
+`no_secret_leak`, `dsn_scrub_wiring`, `postgres_durability`, `secret_ownership`, `image_pins`,
+`test_enumeration`) and 4 paired self-tests that break a gate on purpose and fail if it stays green.
+The authoritative count is derived, not written here: `tests/harness/checks/test_enumeration.sh` fails
+unless every `checks/*.sh` is named in `.github/workflows/real-infra.yml`, and prints the live number.
+Deferred work is registered in [`future-work.md`](./future-work.md) rather than left implicit.
 
-**Open Decisions.** The pre-deploy gate walkthrough (`install-and-deploy.md#part-7--developing-and-testing-locally`) surfaced two
-new ones, **G11-OD-1** and **G12-OD-1**, and **both were ruled on 2026-07-29, implemented, tested on
-real infra, and closed**: G11-OD-1 option B (a Control that loses the singleton lock **pauses** dispatch
-and re-acquires on a bounded retry rather than exiting — ADR-0011), and G12-OD-1 option A (an FK-aware
-per-column carve-out on `job_events`' append-only trigger, restoring the documented hard delete —
-`send_managed_0024`, ADR-0012). The standing non-blocking exception (R2-5, a stale example inside a locked
-spec) remains the only open item. Read `history/open-decisions.md`, not this paragraph, for the live
-list. The evidence this verdict rests on — which
-phase verified what, and what each review gate found — is in `history/phase-build-record.md`'s
-"BUILD COMPLETE" section; it is provenance, not something you need in order to run the system.
+**Open Decisions: zero open.** Every decision raised across phases 0–10 and since the fork is ruled and
+closed, and the rulings in force are listed in [`open-decisions.md`](./open-decisions.md). Two of them
+shaped this document: **G11-OD-1** option B (a Control that loses the singleton lock **pauses** dispatch
+and re-acquires on a bounded retry rather than exiting — [ADR-0011](./adr/0011-singleton-lock-loss-does-not-stop-dispatch.md))
+and **G12-OD-1** option A (an FK-aware per-column carve-out on `job_events`' append-only trigger,
+restoring the documented hard delete — `send_managed_0024`,
+[ADR-0012](./adr/0012-job-events-set-null-fks-collide-with-append-only-trigger.md)). R2-5 (a stale example
+inside a locked spec) was ruled 2026-08-07: annotate, do not rewrite. The evidence this verdict rests
+on — which phase verified what, and what each review gate found — is in
+`history/phase-build-record.md`'s "BUILD COMPLETE" section; it is provenance, not something you need in
+order to run the system.
 
 Two capacity ceilings exist and they are different kinds of number:
 

@@ -88,7 +88,7 @@ EOF
 # `down -v` drops the volume that HELD these rows, so a reset without a re-seed leaves every worker
 # unable to register (`register rejected: unauthenticated`) until it burns its retry budget and
 # exits 1. `up --wait` reports the worker "healthy" moments before it dies, so the failure looks like
-# a green start. Found walking Docs/coldmail-send-managed-local-test-guide.md Stage 0 as an operator.
+# a green start. Found walking Docs/install-and-deploy.md#part-7--developing-and-testing-locally Stage 0 as an operator.
 seed_rows() {
   # Read the values by grep (NOT `source .env`: bash would expand the '$' in the bcrypt
   # hash). Un-escape the compose '$$' back to '$' for the real hash the Control compares.

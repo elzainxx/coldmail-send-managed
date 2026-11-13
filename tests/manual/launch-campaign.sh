@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # launch-campaign.sh — seed a platform campaign and POST /v1/run against the LIVE dev stack.
 #
-# WHY THIS IS TRACKED. Walking Docs/coldmail-send-managed-local-test-guide.md needs a campaign on demand at
+# WHY THIS IS TRACKED. Walking Docs/install-and-deploy.md#part-7--developing-and-testing-locally needs a campaign on demand at
 # nearly every stage (7, 8, 9, 10, 12). That was being done with ad-hoc throwaway shell each time,
 # which is how two stages ended up not reproducible after the fact. This is that recipe, once.
 #

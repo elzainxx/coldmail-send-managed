@@ -7,7 +7,7 @@ package adminapi
 // returned the byte-identical bare envelope {"code":"unprocessable","message":"The request is
 // well-formed but cannot be processed."}, so an operator could not tell "already quarantined" from
 // "this pause auto-clears" without reading the Control's log. Found walking
-// Docs/coldmail-send-managed-local-test-guide.md Stage 4, whose pass criterion is "illegal transitions are
+// Docs/install-and-deploy.md#part-7--developing-and-testing-locally Stage 4, whose pass criterion is "illegal transitions are
 // rejected with a USABLE error".
 //
 // ANTI-VACUITY (Rule 10): the load-bearing assertion is the DISTINCTNESS check — seven refusals,

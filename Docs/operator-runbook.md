@@ -208,7 +208,7 @@ holds one job in flight at a time, so a tick that claims more jobs than there ar
 requeues the overflow rather than blocking. That is normal backpressure, and it shows up as
 throughput below what you expect — never as a stall. If `boxes.active` is healthy and
 `sends_last_window` is *non-zero but low*, you are throughput-limited, not stalled: see
-[`capacity-planning.md`](./capacity-planning.md).
+[`operator-runbook.md`](./operator-runbook.md#capacity-planning).
 
 ### Step 5 — Does the pool have an eligible account?
 
@@ -499,7 +499,7 @@ Do **not** unquarantine when:
 - **The account has never succeeded.** `last_success_at IS NULL` with a low score usually means it
   was misconfigured from the start (wrong host, wrong port, wrong identity). Verify it can send at
   all before putting it back in rotation — see
-  [`smoke-test-real-provider.md`](./smoke-test-real-provider.md).
+  [`go-live-checklist.md`](./go-live-checklist.md#real-provider-smoke-test-the-first-live-send).
 - **You do not know why it happened.** Guessing here is how one bad account quietly burns a sending
   domain. Read the trail first; it is three queries.
 
@@ -685,7 +685,7 @@ you are looking at a temporary dip or a real shortage.
 
 | What you found | What to do |
 |---|---|
-| Every account **at daily limit** | Genuine capacity shortage. Add accounts, or raise `daily_limit` on existing ones — but only to a level the provider actually tolerates. Raising a limit past what a mailbox can sustain converts a clean wait into `throttle` failures and score damage. [`capacity-planning.md`](./capacity-planning.md) has the sizing table. **Raising the limit only re-opens the account if it is not yet PAUSED** — see the note below; on a `paused: daily_limit` row it changes nothing until the reset. |
+| Every account **at daily limit** | Genuine capacity shortage. Add accounts, or raise `daily_limit` on existing ones — but only to a level the provider actually tolerates. Raising a limit past what a mailbox can sustain converts a clean wait into `throttle` failures and score damage. [`operator-runbook.md`](./operator-runbook.md#capacity-planning) has the sizing table. **Raising the limit only re-opens the account if it is not yet PAUSED** — see the note below; on a `paused: daily_limit` row it changes nothing until the reset. |
 | Accounts **throttle-paused** | You are sending faster than the provider allows. Widen `send_delay_min_sec` / `send_delay_max_sec`, or lower `concurrency_per_user_default`. Adding accounts also helps, because pacing is per-lane. |
 | Accounts **quarantined / disabled / manually paused** | This is the case that can genuinely fail jobs. Resolve each per [An account got quarantined](#an-account-got-quarantined) — and note that this is the *only* configuration in which exhaustion is terminal. |
 | Pool has **zero accounts** | Add one (`POST /v1/admin/accounts`). A brand-new empty pool reads `exhausted` immediately, which is honest but harmless: the alert condition only fires once at least one job is actually waiting on it. |
@@ -780,7 +780,7 @@ Reclaim handles the *jobs*. It does not bring the worker back. Step in when:
   and until it disconnects the Control will keep pushing it credentialed jobs. For a routine
   decommission you are stopping it anyway. If you are revoking because you think the worker is
   **compromised**, the order is reversed and it matters:
-  [`disaster-recovery.md`](./disaster-recovery.md) §4a.
+  [`operator-runbook.md`](./operator-runbook.md#disaster-recovery-key-backup-and-rotation) §4a.
 - **Reclaim is not draining.** If `assigned`/`sending` counts for a dead worker are not falling and
   there are no `actor = 'reclaim_loop'` events, the reclaim loop itself is not running — check the
   Control's log for a DB outage halt or a panic, and see
@@ -798,7 +798,7 @@ If `alert_webhook_url` is set, each condition also POSTs once on its rising edge
 `(condition, subject)` until it clears, so a persistent condition does not spam you. The payload
 carries only the condition code, the subject id, and timestamps: no content, no credentials, no
 internal reasons. That is a trust-boundary rule, not a feature gap. Wiring it up is in
-[`monitoring.md`](./monitoring.md).
+[`operator-runbook.md`](./operator-runbook.md#monitoring-and-alerting).
 
 ### `pool_exhausted`
 
@@ -988,7 +988,7 @@ The signature of a healthy system: `dispatch_paused` false, `sends_last_window` 
 | `boxes.active` | Your expected worker count | Below it → degraded capacity. **0 → full outage.** |
 | `workers.stale` | 0 | > 0 → [A worker died](#a-worker-died). |
 | `workers.oldest_active_heartbeat_age_sec` | Well under `heartbeat_interval_sec × heartbeat_missed_threshold` | Creeping toward that product → a worker is nearly stale but has not crossed yet. An **early warning**, and the most useful field here. |
-| `accounts.healthy` | Enough to carry your volume | 0 → nothing can send. Compare against [`capacity-planning.md`](./capacity-planning.md). |
+| `accounts.healthy` | Enough to carry your volume | 0 → nothing can send. Compare against [`operator-runbook.md`](./operator-runbook.md#capacity-planning). |
 | `accounts.paused` / `at_daily_limit` | Some, cyclically | These **overlap deliberately** — a daily-limit pause counts in both, so the buckets do not sum to your account total. Do not read them as disjoint. Both self-clear. |
 | `accounts.quarantined` | 0 | > 0 → the standing count of accounts needing manual attention. Unlike the alert condition, this does **not** age out. |
 | `accounts.disabled` | Whatever you set | Unexpectedly non-zero → someone disabled an account; check `account_events`. |
@@ -1073,7 +1073,7 @@ psql "$DATABASE_URL" -c "SELECT pid, backend_start FROM pg_locks l JOIN pg_stat_
   `/v1/admin/*` + `/v1/describe` keep answering. None of them *claim* work, which is the property the
   pause protects.
 
-**Alerting.** `readyz` is the signal ([`monitoring.md`](./monitoring.md)); alert on two consecutive
+**Alerting.** `readyz` is the signal ([`operator-runbook.md`](./operator-runbook.md#monitoring-and-alerting)); alert on two consecutive
 failures so a 5s self-healing blip does not page anyone.
 
 ---
@@ -1094,7 +1094,7 @@ Two grep-able fields carry most of the value:
 | `request_id=` / `rid=` | Bridge a client's error envelope to the cause. The envelope returned to a caller carries only `{code, message, request_id}`; the internal `reason=` behind it exists **only in this log**. Given a request id from a complaint, `grep` it here. |
 
 That second point has an operational consequence: **without log retention, a reported error is a code
-and a request id with nothing behind them.** Ship the logs somewhere ([`monitoring.md`](./monitoring.md)).
+and a request id with nothing behind them.** Ship the logs somewhere ([`operator-runbook.md`](./operator-runbook.md#monitoring-and-alerting)).
 
 ```bash
 journalctl -u send_managed-control --since "1 hour ago" | grep 'level=error'   # real faults only
@@ -1107,6 +1107,837 @@ bug to file, not a page. Volume and pattern are what distinguish the two, and th
 
 ---
 
+## Capacity planning
+
+How many sending accounts you need for a given daily volume, how many workers, and — the question
+that actually decides a deployment — **which limit binds first**. The short answer is almost always
+*per-account daily limits*, not the Control.
+
+[`config-reference.md`](./config-reference.md) is the authoritative source for every key named
+below, and the only file the `config_drift` CI gate checks. **Sizing arithmetic cannot be done
+without concrete numbers**, so this section does use three of them — declared once, here, rather than
+scattered through the prose:
+
+| Key | Value used in this section's arithmetic | Used for |
+|---|---|---|
+| `daily_limit_default` | 500 sends/account/day | §2's account-count table |
+| `send_delay_min_sec` / `send_delay_max_sec` | 3–7s | §2's per-lane rate note |
+| `debug_log_retention_days` | 7 days | §5's storage estimate |
+
+These were the seeded defaults when this section was written. They are **not** gate-checked here — only
+`config-reference.md` is — so if a number above disagrees with `config-reference.md`, that file wins
+and this table is stale. Re-do the arithmetic with your own configured values; the *shape* of each
+result (which ceiling binds) is what this section is for, not the specific figures.
+
+---
+
+### 1. The two ceilings, and why they are not the same kind of number
+
+| Ceiling | What sets it | Character |
+|---|---|---|
+| **Per-account daily volume** | `daily_limit` per account (default from `daily_limit_default`), enforced against a per-account daily counter that resets at `daily_reset_hour` in `daily_reset_timezone` | A **hard, deliberate** cap. Reached in the normal course of business. Raising it is a reputation decision, not a scaling one. |
+| **Single-Control send rate** | The Control's own dispatch throughput: **~370 sends/min measured**, ~300–370/min sustained band | A **soft, measured** ceiling on specific hardware. Not a designed limit. |
+
+The measured figure is the 2026-07-26 run in [`operator-runbook.md`](./operator-runbook.md#measured-throughput-ceiling-e11-load-test): 4 vCPU
+/ 8 GiB Docker host, 6 real workers, RAM-backed Postgres. Read it with that run's own caveat — the worker
+side was likely still a partial co-bottleneck at 6 workers, so ~370/min is *this hardware's practical
+ceiling*, not the Control's isolated maximum. Re-run `tests/harness/load_e11.sh` before any material
+capacity increase and append a dated entry; do not extrapolate from the table below.
+
+**370 sends/min is ~533,000 sends/day** if you could sustain it for 24 hours. You cannot, and you
+would not want to — but it establishes the scale: the Control is not the constraint for any realistic
+V1 volume. Accounts are.
+
+---
+
+### 2. How many accounts do I need?
+
+Accounts needed ≈ **daily volume ÷ per-account daily limit**, then add headroom, because an account
+that is paused, quarantined, or throttled contributes nothing that day.
+
+At the 500/account/day figure declared above (`daily_limit_default`):
+
+| Target sends/day | Accounts at 500/day (bare minimum) | With ~30% headroom (**deploy this**) | Peak rate needed (over an 8h window) | Which limit binds first |
+|---|---|---|---|---|
+| 1,000 | 2 | 3 | ~2/min | **Account daily limits.** Control is idle. |
+| 5,000 | 10 | 13 | ~10/min | **Account daily limits.** |
+| 10,000 | 20 | 26 | ~21/min | **Account daily limits.** |
+| 25,000 | 50 | 65 | ~52/min | **Account daily limits.** |
+| 50,000 | 100 | 130 | ~104/min | **Account daily limits.** Control at ~30% of measured ceiling. |
+| 100,000 | 200 | 260 | ~208/min | **Account daily limits** — but the Control is now at ~55% of measured ceiling. Re-run the load test. |
+| 200,000 | 400 | 520 | ~417/min | **The Control binds.** ~417/min exceeds the measured ~370/min. Spread the window, or re-run the load test with more workers before committing. |
+
+The peak-rate column assumes the volume is delivered inside an 8-hour window (`volume ÷ 480 min`),
+which is the realistic case for business-hours sending — and it is what turns the Control into a
+constraint far earlier than the 533k/day arithmetic suggests. If you send around the clock, divide by
+1440 instead and the Control constraint moves out by ~3×.
+
+Two things this table does **not** account for, both of which push the account count up:
+
+- **Pacing.** `send_delay_min_sec`/`send_delay_max_sec` impose a random delay *per lane*, and
+  `concurrency_per_user_default` caps lanes per user. With the 3–7s delay declared above, a single lane
+  sustains roughly 6–20 sends/min; a user's ceiling is about `lanes × that`. If your measured rate is
+  well below the table's peak-rate column, pacing is the reason, not capacity —
+  [`operator-runbook.md`](./operator-runbook.md) covers telling those apart.
+- **A single-account pool has no rotation.** Account selection walks accounts in a deterministic
+  order (exhaust-then-move-on) or round-robin per pool. With one account there is nowhere to move on
+  to: one throttle pauses the whole pool.
+
+---
+
+### 3. Why account daily limits almost always bind first
+
+For any volume where a small team would deploy this module, the arithmetic is one-sided: 26 accounts
+at the default limit cover 10k/day, and 10k/day is ~21 sends/min — under 6% of the measured Control
+ceiling. You will add accounts long, long before you add a second Control (which you cannot do anyway:
+the singleton is a locked invariant, and horizontal Control scaling is
+[future work](./future-work.md)).
+
+The practical consequence: **treat "the pool is exhausted" as the normal scaling signal, and
+"send_rate_per_min has plateaued while workers sit idle and the queue grows" as the rare one.** The
+first means add accounts. Only the second means you have hit the Control, and it is the specific
+saturation signature the load test documents.
+
+There is one important asymmetry: a pool at its daily limit reports `headroom: "exhausted"` and its
+jobs sit in `waiting_for_capacity`, which is **not an error** — those jobs read as clean pending
+`queued` work and resume at the daily reset. Do not size to eliminate `waiting_for_capacity`
+entirely; size so it clears within the same day.
+
+---
+
+### 4. How many workers?
+
+A worker holds **one job in flight**. That makes worker count a function of send *rate* and per-send
+duration, not of daily volume:
+
+```
+workers ≈ peak sends/min × (average seconds per send ÷ 60)
+```
+
+An SMTP send is typically 1–3 seconds including connect, TLS, AUTH, and DATA. At 100 sends/min with
+2s sends, that is ~3.3 concurrently busy workers; round up generously, because a worker waiting on a slow
+provider is a worker doing nothing else.
+
+| Peak sends/min | Workers (2s/send, rounded up with headroom) |
+|---|---|
+| 20 | 2 (minimum for redundancy, not throughput) |
+| 50 | 3 |
+| 100 | 4–6 |
+| 200 | 8–10 |
+| 370 (measured ceiling) | 12+ — and at this point re-run the load test |
+
+Floor of **two workers regardless of volume**: one worker is a single point of failure for the entire send
+path. Overflow is handled gracefully — when no worker is free, the job is cleanly requeued as
+`no_worker_available`, which is backpressure, not a stall — so under-provisioning workers costs throughput,
+never correctness.
+
+Workers are cheap and stateless. Over-provision them; they are the least risky thing to add.
+
+---
+
+### 5. Database and storage
+
+Postgres is not a capacity concern at these volumes, but storage growth is worth a moment because one
+table dominates it.
+
+- **`send_logs` is the growth driver**, holding the full rendered body per send. At ~10 KB/message
+  and 10k sends/day that is ~100 MB/day *while within retention* — steady-state ≈
+  `daily volume × message size × debug_log_retention_days`. At the 7 days declared above and those numbers,
+  ~700 MB. Content is dropped by the retention sweep after `debug_log_retention_days`; metadata rows
+  remain.
+- **`job_events` and final job states are permanent by design** and never swept. They are small rows,
+  but they grow forever — plan for slow, unbounded growth of a narrow table.
+- Retention is a config row, so this is a dial you can turn at runtime with no redeploy. It is also a
+  **privacy** decision, not only a storage one — see
+  [`security-posture.md`](./security-posture.md) §3.2.
+
+---
+
+### 6. What to measure before committing to a number
+
+Do not size from this section alone. Two checks first:
+
+1. **Re-run the load test on your hardware.** `bash tests/harness/load_e11.sh [N_WORKERES] [MAX_LANES]`,
+   with a materially larger `N_WORKERES` than 6 if you are anywhere near 200/min. Append a dated entry to
+   [`operator-runbook.md`](./operator-runbook.md#measured-throughput-ceiling-e11-load-test) — it is a versioned artifact, never overwritten.
+2. **Confirm your providers' real per-mailbox limits.** The seeded `daily_limit_default` is a
+   conservative stand-in.
+   The provider's actual limit — and its tolerance for the rate you send at — is the number that
+   matters, and exceeding it produces throttling and reputation damage that this module can pause
+   around but cannot undo. Note also that a `250` acceptance is all this system can observe: there is
+   no bounce data in V1, so provider-side monitoring is what tells you a limit was too aggressive.
+
+### Measured throughput ceiling (E11 load test)
+
+Recorded, versioned results for **E11** (`Docs/history/phase-9_5-operability-and-control-plane-safety.md`
+§7 / `Docs/history/phase-0-groundwork.md` §4.7). This is a **before-you-SCALE gate, not a launch
+blocker** — the numbers below are a measured ceiling on THIS run's hardware/config, not a
+pass/fail. Re-run `tests/harness/load_e11.sh` before any material capacity increase and append a
+new dated entry (OD-7 ruling: committed as a versioned doc artifact, never overwritten).
+
+#### How to reproduce
+
+```bash
+COMPOSE_INVOCATION="docker compose -f docker-compose.yml -f tests/harness/compose.test.yml" \
+  bash tests/harness/load_e11.sh [N_WORKERES] [MAX_LANES]
+```
+
+The script provisions `N_WORKERES` real, distinctly-identified worker processes (OD-15 option b — a
+shared worker identity would make the workers NOT independent, defeating "the worker side is never the
+bottleneck"), over-provisions accounts against the real Mailpit sink, zeroes the Phase 6 per-lane
+pacing delay (`send_delay_min_sec`/`send_delay_max_sec` — otherwise that dial, not the Control, sets
+the observed ceiling) and shrinks `health_metrics_window_sec` to the measurement window so
+`send_rate_per_min` isn't diluted into "per hour". Both are restored on exit. It ramps
+`concurrency_per_user_default` across `1, 2, 4, 8, MAX_LANES` steps, seeding `C` synthetic
+users × 200 queued jobs per step (`C == lanes`, so per-user concurrency growth and total fan-out
+grow together), and polls `GET /v1/admin/health` after a fixed window each step.
+
+#### 2026-07-26 — dev host, N_WORKERES=6, MAX_LANES=12
+
+**Hardware.** Docker Desktop dev host, 4 vCPU / 8 GiB RAM allocated to the Docker VM. RAM-backed
+Postgres (`tests/harness/compose.test.yml`'s `fsync=off`). Real Control, real worker processes, real
+Mailpit sink — no mocks.
+
+**Config held at seeded defaults** except the two temporarily zeroed for the run (`send_delay_min_sec`,
+`send_delay_max_sec` — restored after): `dispatch_tick_interval_ms=1000`, `reclaim_tick_interval_ms=15000`,
+`job_max_processing_time_sec` at its seeded default.
+
+| lanes (`concurrency_per_user_default`) | users (C) | `send_rate_per_min` | `ticks_per_min` | `queue.queued` at measurement | `boxes.active` |
+|---|---|---|---|---|---|
+| 1  | 1  | 46  | 50 | 177  | 6 |
+| 2  | 2  | 194 | 46 | 455  | 6 |
+| 4  | 4  | 238 | 50 | 882  | 6 |
+| 8  | 8  | 370 | 54 | 1820 | 6 |
+| 12 | 12 | 322 | 40 | 3459 | 6 |
+
+**Max observed send rate: 370 sends/min**, at lanes=8/users=8/workers=6.
+
+**Saturation observed at lanes=12, users=12, workers=6** — throughput regressed from 370/min to
+322/min despite MORE concurrency and workers still reporting active, the §7-documented saturation
+signal ("backlog growth despite idle workers... Control-bound, not capacity/account-bound"). At only
+6 workers, worker-side send throughput itself becomes a co-bottleneck before 12 lanes, so this run's
+322-370/min band should be read as **this hardware's practical ceiling with 6 workers**, not a firm
+upper bound on the Control's own per-tick capacity — a re-run with more workers (the method's own N
+parameter) would separate the two more cleanly. Recorded as the honest result of THIS run rather
+than extrapolated.
+
+**Backlog drain note.** At lanes≥4 the seeded backlog did not fully drain within the script's
+120s bound before the next ramp step began (each step seeds 200×C fresh jobs on top of whatever
+the previous step left in flight) — expected at this worker count and not itself a defect; it is
+consistent with, and part of the evidence for, the saturation point recorded above.
+
+**Input to the HA/sharding decision (§7's stated purpose):** at this hardware/worker-count, the
+single Control sustains on the order of **300-370 sends/min** before the ramp's own concurrency
+stops buying more throughput. A future capacity decision should re-run this test with a
+materially larger `N_WORKERES` (the worker side was very likely still a partial co-bottleneck here)
+before treating this number as the Control's true isolated ceiling.
+
+---
+
+## Monitoring and alerting
+
+Where to point an uptime monitor, where to point the alert webhook, and what each signal means. Two
+endpoints and one config key; the whole surface is small on purpose.
+
+Triage — what to *do* when something fires — is the first half of this runbook.
+This section is only about wiring the signals up.
+
+---
+
+### 1. The three signals
+
+| Signal | Auth | Use it for |
+|---|---|---|
+| `GET /healthz` | **none** | Liveness. "The process is up." |
+| `GET /readyz` | **none** | Readiness. DB reachable **and** singleton lock genuinely held. `200` = ready, `503` = not. |
+| `GET /v1/admin/health` | **Domain B operator key** | The operational snapshot: dispatch state, queue counts, worker liveness, account/pool summaries, error counts over a rolling window, shadow-mode summary, and active alert conditions. |
+
+`/healthz` and `/readyz` are deliberately unauthenticated and deliberately thin — they carry no
+operational detail, which is what makes exposing them to a monitoring service safe.
+
+**Do not point an unauthenticated uptime check at `/v1/admin/health`.** It requires the operator
+bearer key and exposes real operational state; it is a Domain B route, not a probe.
+
+---
+
+### 2. Uptime monitoring — point it at `/readyz`
+
+`/readyz` is the right probe because it fails for the two reasons that actually matter:
+
+```
+GET http://<control-host>:8080/readyz
+expect: HTTP 200 and body
+  {"status":"ready","checks":{"db":true,"singleton_lock":true},"db":true,"singleton_lock":true,"at":"…"}
+alert on: any non-200, or db:false, or singleton_lock:false     <- the TOP-LEVEL fields
+```
+
+**Which copy to alert on.** The two dependency booleans appear twice, and this is deliberate. The
+top-level `db` / `singleton_lock` are what this section has always told you to watch, and they are
+what the two paragraphs below are about — keep pointing your check at those. The `checks{}` object is
+the platform's *uniform* readiness envelope (`status` / `checks` / `at`), added so one dashboard can
+render all three modules without a parser each: a consumer walks `checks{}` and displays whatever
+names it finds, instead of knowing that this module reports `db` and `singleton_lock` while the
+verify module reports `db` and `pepper`. Both copies are computed from the same two variables, so
+they cannot disagree.
+
+Use `checks{}` if you are building something that must work against more than one module. Use the
+top-level fields for a single-module uptime check — they are the older, narrower, and equally
+supported contract.
+
+- `db:false` — the Control cannot reach Postgres. Dispatch has halted on bounded backoff; the Control
+  stays alive and recovers on its own when the DB returns, needing no reconciliation.
+- `singleton_lock:false` — the Control is running but does **not** hold the dispatch lock, so **nothing
+  is dispatching**. This is the failure a naive `/healthz` check misses entirely, and it is the
+  reason to probe `/readyz` instead. Since 2026-07-29 (G11-OD-1 / ADR-0011) this is **enforced, not
+  merely reported**: the dispatch, reclaim and retention loops pause while the lock is unheld, and the
+  keeper re-attempts acquisition every `brain_singleton_reacquire_interval_sec` (default 5s), so a
+  transient loss usually self-heals within seconds and the alert clears on its own. Two consecutive
+  failures therefore mean the lock is *genuinely* unavailable — most often because another Control took
+  it — not that a blip is in progress. See the runbook's
+  [`singleton_lock:false` on a Control that was previously ready](operator-runbook.md#readyz-says-singleton_lockfalse-on-a-control-that-was-ready-mid-life-lock-loss).
+
+A 30–60s interval is plenty. Alert on two consecutive failures rather than one, so a restart during a
+deploy does not page anyone.
+
+Use `/healthz` only where you need a pure "is the process alive" check that stays green during a DB
+outage — e.g. a container orchestrator's liveness probe, where restarting on a DB outage would be
+exactly the wrong response.
+
+Workers expose **no** listener at all, so there is nothing to probe on a worker host. Worker liveness is
+observed from the Control, in `workers` on the admin health endpoint. That is by design (see
+[`security-posture.md`](./security-posture.md) §4).
+
+---
+
+### 3. Alert webhook
+
+The Control POSTs a JSON payload on the **rising edge** of each alert condition. Set the destination
+with the `alert_webhook_url` config key — empty (the default) means alerting is off and conditions
+remain visible only via the health endpoint.
+
+#### Wiring it up
+
+```bash
+# Domain B operator key. Exact request shape: api-contract.md
+curl -fsS -X PUT "$ADMIN/v1/admin/config/alert_webhook_url" \
+  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"value":"https://hooks.example.com/services/T000/B000/XXXX"}'
+```
+
+It takes effect **immediately, with no redeploy** — the URL is re-read on each health evaluation.
+Only `http://` or `https://` values are accepted; anything else is rejected at write time.
+
+> **`SEND_MANAGED_ALERT_WEBHOOK_URL` in `.env.example` is inert.** No code reads that variable — the
+> webhook destination comes *only* from the `alert_webhook_url` config row. Setting the env var alone
+> does nothing. Recorded in [`future-work.md`](./future-work.md).
+
+Prefer `https://`. The payload carries no secrets (§3.3), but the URL itself is usually a bearer
+capability for the receiving system.
+
+#### The payload
+
+```json
+{
+  "condition": "worker_death",
+  "severity": "critical",
+  "subject": { "type": "box", "id": "<uuid>" },
+  "detail":  { "...": "condition-specific" },
+  "fired_at": "2026-07-28T14:03:11Z",
+  "module": "send_managed"
+}
+```
+
+All three conditions today carry `severity: "critical"`. The three conditions and how to triage each
+are in the runbook's "Alert conditions → triage" section.
+
+#### Delivery semantics — read these before relying on it
+
+- **Rising edge only, deduped.** One POST per `(condition, subject)` when the condition appears. It
+  will not re-fire while the same condition persists for the same subject. There is **no "cleared"
+  notification** — a fired alert is never followed by an all-clear POST, so build your receiver
+  around "check the health endpoint to see current state," not around pairing up/down events.
+- **Conditions are evaluated when the health endpoint is called.** They are derived from live state at
+  request time, not by a background scanner. **If nothing ever calls `GET /v1/admin/health`, no
+  webhook ever fires.** This is the single most important operational fact on this section — the webhook
+  is a *push on evaluation*, not an independent monitor.
+- **Delivery is best-effort:** 5s timeout, 3 bounded attempts with a short backoff, then logged and
+  dropped. It never blocks or slows the health response, and never touches job or account state.
+- **The payload is two-vocabulary clean by design** — condition codes, subject ids, timestamps, and
+  condition detail only. Never content, credentials, internal reasons, SQL, or internal hostnames.
+  The webhook is treated as untrusted outbound egress across a trust boundary
+  ([`security-posture.md`](./security-posture.md)).
+
+#### The consequence you must act on: poll the health endpoint
+
+Because conditions are evaluated on request, wire a scheduled poll. Without it, alerting is silent.
+
+```bash
+# /etc/cron.d/send_managed-health  — evaluate conditions every 5 minutes so the webhook can fire.
+# The response is discarded; the POINT is the evaluation. Keep the key out of the crontab itself.
+*/5 * * * * control curl -fsS -m 10 -o /dev/null \
+  -H "Authorization: Bearer $(cat /etc/send_managed/admin.key)" \
+  http://127.0.0.1:8080/v1/admin/health || true
+```
+
+Notes on that snippet:
+
+- `127.0.0.1` — the admin surface should not be reachable off-host unproxied.
+- The key is read from a `0400` file owned by the cron user, not embedded in the crontab (which is
+  world-readable on many systems).
+- `|| true` so a failed poll does not generate cron mail noise; the uptime monitor on `/readyz` is
+  what tells you the Control is down.
+- **No `%` anywhere in a crontab command.** Cron treats `%` as a newline, so adding something like
+  `-w '%{http_code}'` to that line silently truncates the command. Put anything that needs `%` in a
+  script and call the script.
+- 5 minutes is a reasonable default. Note the interaction with `health_metrics_window_sec`: the
+  rate/error/shadow counts are windowed, so a poll interval much longer than that window leaves gaps
+  in what you would have seen.
+
+---
+
+### 4. A concrete end-to-end example
+
+A minimal, complete hookup for a single-Control deployment:
+
+1. **Uptime monitor** (any external service, or a second host): `GET http://<control>:8080/readyz` every
+   60s, alert after two consecutive non-200s. Covers "Control down", "DB unreachable", "not holding the
+   dispatch lock".
+2. **Health poll**: the cron entry above, every 5 minutes. This is what makes the webhook work.
+3. **Webhook destination**: set `alert_webhook_url` to your incident channel's inbound URL. You now
+   get a message the first time a pool exhausts, an account is quarantined, or a worker dies. Treat this
+   value as **privileged config**: it is validated for scheme prefix only, so the Control will POST from
+   inside your trust boundary to any address it resolves — including loopback, RFC-1918, and cloud
+   link-local metadata. Constrain the Control's egress at the network layer rather than relying on the
+   value being sensible ([`security-posture.md`](./security-posture.md) §3.14).
+4. **On receiving an alert**: open the runbook at "Alert conditions → triage", and run
+   `curl -fsS "$ADMIN/v1/admin/health" -H "Authorization: Bearer $KEY" | jq` to see current state —
+   the alert tells you *what*, the endpoint tells you *now*.
+5. **Log shipping** (optional but recommended): the Control logs internal failure reasons keyed by
+   `request_id`, which is the *only* place the detail behind a client error envelope exists. Without
+   log retention, a reported error is a code and a request id with nothing behind them.
+
+`jq` is required for step 4 — the health endpoint returns compact single-line JSON. It is installed by
+the prerequisites in [`install-and-deploy.md`](./install-and-deploy.md).
+
+---
+
+### 5. What is deliberately not here
+
+- **No metrics endpoint, no Prometheus exposition, no tracing exporter.** `GET /v1/admin/health` is
+  a JSON snapshot, not a time series. If you want history, poll it and store the response — several
+  fields (`send_rate_per_min`, `errors_last_window`) are already windowed and graph cleanly.
+- **No "cleared" webhook** (§3), and one asymmetry worth knowing: `pool_exhausted` and `worker_death`
+  derive from live state, while `account_quarantined` is scoped to `health_metrics_window_sec` because
+  a quarantine is a point-in-time event. **That condition clearing does not mean the account
+  recovered** — use the standing `accounts.quarantined` count instead. The runbook covers this.
+- **No bounce or complaint feedback.** There is none in V1: a provider `250` is recorded as `sent` and
+  nothing downstream is observed. Deliverability monitoring has to come from the provider side. See
+  the runbook's deliverability section and [`future-work.md`](./future-work.md).
+
+---
+
+## Disaster recovery, key backup, and rotation
+
+Read the **key backup** section before you go live. It is the one procedure in this repo whose
+absence is unrecoverable: everything else described here can be redone from a backup or a fresh
+deploy, and the master key cannot.
+
+This section does not restate config defaults or request shapes — those are in
+[`config-reference.md`](./config-reference.md) and [`api-contract.md`](./api-contract.md).
+Diagnosing a live incident is the diagnostic trees earlier in this runbook; this section is for the
+losses those trees cannot fix.
+
+---
+
+### 1. The single biggest risk: losing the master key
+
+#### Why it is fatal
+
+SMTP credentials are stored in `send_managed.accounts.credential_ciphertext`, encrypted AES-256-GCM. The
+key lives **outside the database**, held only by the Control (`KMS_DEV_KEY_FILE`, or your KMS wiring).
+That separation is the point — a stolen database dump yields no credentials — and it is exactly why
+losing the key is terminal:
+
+- **A database backup does not contain the key.** Restoring the DB restores ciphertext only.
+- **There is no escrow, no recovery share, no second copy inside the system.** Nothing in this repo
+  can reconstruct the key from anything else it holds.
+- **Decrypt is Control-only by design** (CLAUDE.md Rule 6). The platform holds no Decrypt capability
+  that could be used to rescue the plaintext, and adding one is forbidden.
+- **The AAD binds each ciphertext to its row** (`account.id ‖ credential_key_id`), so ciphertext
+  cannot be moved, re-labelled, or brute-forced across accounts.
+
+If the key is gone, **every SMTP credential in the system is permanently unrecoverable.** The
+accounts, pools, jobs, and history all survive; the secrets do not. Recovery is manual re-entry of
+every account's SMTP password via `PATCH /v1/admin/accounts/{id}` with `smtp_secret`. For a hundred
+accounts, that is a hundred password resets at the provider — assume most originals are not written
+down anywhere else.
+
+The failure is also **silent until send time**. A Control that starts with the wrong key starts
+cleanly (the key is only validated for length and cipher init at startup); the failure surfaces as
+`credential decrypt failed (authentication)` on the first send attempt per account. Confirm a
+restore with a real send, not with a clean startup log.
+
+#### What to back up
+
+Exactly one file (or, with a cloud KMS, the key's own backup/replica arrangement):
+
+| Item | Where it is in a default install | Notes |
+|---|---|---|
+| The master key material | the path in `KMS_DEV_KEY_FILE` (install guide: `/etc/send_managed/kms/master.key`; local dev: `secrets/dev/kms/dev-master.key`) | 32 raw bytes, AES-256. This is the whole risk. |
+| `CREDENTIAL_KEY_ID` | the Control's environment | Not secret, but a restore with the wrong label fails AAD authentication. Back up the *pairing* of key file to label. |
+
+The mTLS CA key (local dev: `secrets/dev/certs/ca.key`) is a *separate* and much less severe
+concern — and note it belongs on the CA host, not on the Control host, in a real deploy. Losing it
+means re-issuing a CA and re-deploying leaf certs to every worker, which is laborious but fully
+recoverable. Losing the master key is not. Do not conflate them, and do not store them together
+(a single compromised backup should not yield both the transport identity and the credential key).
+
+#### Backup procedure
+
+Do this once, before the first real credential is entered, and again after every rotation.
+
+```bash
+# On the Control host, as the operator. Never over a shared terminal, never in a chat transcript.
+umask 077
+
+# Read the key path out of the Control's env file. The trailing sed/tr are NOT decoration: if you
+# copied the install guide's annotated block, the line has an inline "# or your KMS wiring"
+# comment, and a bare `cut -d= -f2-` hands you a path with the comment glued on. Verify, don't
+# assume — an unreadable path here means you back up nothing and find out during a restore.
+KEY_PATH="$(grep -E '^KMS_DEV_KEY_FILE=' /etc/send_managed/control.env \
+             | cut -d= -f2- | sed 's/[[:space:]]*#.*$//' | tr -d '"'\''\r')"
+test -s "$KEY_PATH" || { echo "FATAL: no key at [$KEY_PATH]"; exit 1; }
+test "$(wc -c < "$KEY_PATH")" -eq 32 || echo "WARNING: key is not 32 bytes — check before trusting this backup"
+
+# 1. Wrap it in something you can actually restore from, with a passphrase you have separately.
+gpg --symmetric --cipher-algo AES256 --output /tmp/send_managed-master-key.$(hostname).gpg "$KEY_PATH"
+
+# 2. Record what it is, so a stranger restoring it in two years knows what they hold.
+cat > /tmp/send_managed-master-key.README <<'EOF'
+SendManaged module credential master key (AES-256, 32 raw bytes).
+Pairs with CREDENTIAL_KEY_ID=<value>  <-- fill this in; a mismatch fails AAD authentication.
+Restore to the path named by KMS_DEV_KEY_FILE on the Control host, mode 0400, owned by the control user.
+Losing this file makes every SMTP credential in send_managed.accounts permanently unrecoverable.
+EOF
+
+# 3. Move both OFF this host, then shred the temporary copies.
+#    (scp/rclone/your secrets manager — see "Where the backup lives" below.)
+shred -u /tmp/send_managed-master-key.*.gpg /tmp/send_managed-master-key.README
+```
+
+Non-negotiables:
+
+- **Off-host.** A backup on the Control host does not survive the loss of the Control host.
+- **Encrypted at rest with a passphrase held separately from the backup.** Otherwise the backup is
+  a second copy of the key with weaker access control than the original.
+- **At least two independent locations**, so one failed location is not the incident.
+- **Never in the repo, never in the DB, never in a ticket, chat, or CI variable.** CI has no reason
+  to hold it — nothing in `tests/harness/` needs the production key.
+
+#### Where the backup lives, and who can reach it
+
+Fill this table in for your deployment and keep it current. An unfilled table is the same as no
+backup: at 3am nobody knows where to look.
+
+| Copy | Location | Access controlled by | Last verified |
+|---|---|---|---|
+| Primary | *(e.g. the org password manager, "SendManaged module — master key" item)* | *(who)* | *(date)* |
+| Secondary | *(e.g. offline encrypted media in a physical safe)* | *(who)* | *(date)* |
+| Passphrase | *(separate from both of the above)* | *(who)* | *(date)* |
+
+Access rules that follow from the security model:
+
+- The set of people who can reach a backup copy is the set of people who can decrypt every SMTP
+  credential in the system. Keep it small, name them explicitly, and review it when someone leaves.
+- **At least two people** must be able to reach it, or a single unavailable person is a disaster.
+- The platform team does not need it. Only whoever can deploy the Control does.
+
+#### The recovery drill — run it, do not assume it
+
+An untested backup is a belief, not a backup. Run this on a **staging** Control against a **copy** of
+production data (or at minimum a staging install with real-shaped credentials). It is safe: it
+touches nothing in production and sends nothing to a real recipient.
+
+1. Retrieve the backup and the passphrase *by the documented route only*. If you had to ask someone
+   where it was, or use knowledge not in the table above, the drill has already found its bug — fix
+   the table.
+2. `gpg --decrypt` to a scratch path; confirm the size is exactly 32 bytes:
+   `wc -c < /tmp/restored.key` → `32`.
+3. Install it as the staging Control's `KMS_DEV_KEY_FILE` (mode `0400`, owned by the Control's user) and
+   set `CREDENTIAL_KEY_ID` to the paired label from the README.
+4. Restart the Control. A clean start proves only that the key is 32 bytes — **it does not prove the
+   key is right.**
+5. **Prove it by decrypting.** Queue one job for an account whose credential predates the drill and
+   watch it reach `sent` (send into a sink such as Mailpit, never a real recipient). A wrong key
+   fails here with an authentication error and no plaintext.
+6. Record the date in the table above.
+
+Re-run the drill after every rotation, every change of custodian, and at least annually.
+
+---
+
+### 2. Database loss and restore
+
+#### What is recoverable, and what is not
+
+| State | Recoverable from a DB backup? | Notes |
+|---|---|---|
+| Accounts, pools, config, workers | Yes | Config rows restore to their backed-up values, not to `default_value`. |
+| Credential ciphertext | Yes — **but only useful with the master key** | See §1. |
+| Job rows and final states | Yes | |
+| `job_events` / `account_events` audit trail | Yes | Permanent by design, never swept. |
+| `send_logs` rendered content | Only within retention | The sweep drops raw content after `debug_log_retention_days`; older rows keep metadata, not bodies. |
+| Jobs in flight at the moment of loss | **No** — and this is safe | See below. |
+| The worker outcome buffer | **No** | A worker's buffer survives a *connection* loss, not a *process* restart. See the runbook's "A worker died". |
+
+#### In-flight jobs after a restore
+
+A restore rewinds to the backup's point in time. Jobs that were `assigned`/`sending` then are still
+`assigned`/`sending` in the restored DB, but the workers that held them are long gone. This resolves
+itself: the reclaim loop finds leases past `job_max_processing_time_sec` and requeues them. No
+manual reconciliation, and nothing marks a job `sent` that a worker did not confirm (CLAUDE.md Rule 5 —
+the system never invents an outcome).
+
+The real risk in the other direction: **a job the backup shows as `queued` may already have been
+sent** before the loss. Restoring an older snapshot can therefore re-send. That is a duplicate-mail
+risk, not a corruption risk — decide deliberately whether to hold dispatch after a restore:
+
+```bash
+# Before bringing the Control back up on restored data, if re-sends are unacceptable:
+#   set dispatch_mode=accept_and_defer, bring the Control up, reconcile against provider-side
+#   records, then set it back to serving. Exact call: api-contract.md (PUT /v1/admin/config/{key}).
+#
+#   Set it in the RESTORED DATABASE before starting the Control, not through the API afterwards —
+#   the API needs a running Control, and by the time it answers, the first dispatch tick has
+#   already claimed. This is a jsonb value, so write the envelope, not a bare string:
+#     UPDATE send_managed.config SET value = '{"v":"accept_and_defer"}' WHERE key = 'dispatch_mode';
+#
+#   accept_and_defer, not refuse_new: reconciliation is about jobs already in the restored data,
+#   and refusing new submissions adds a platform-visible 503 outage on top of the recovery. Use
+#   `stopped` only if you want the reclaim sweep off too — for instance while you are hand-editing
+#   job rows during reconciliation and need nothing at all to move underneath you.
+```
+
+#### Restore procedure
+
+1. **Stop the Control first — actually stop it, do not rely on it pausing itself.** Exactly one Control is
+   ever active (advisory-lock singleton); a Control running against a database being restored under it is
+   undefined. Stopping it also releases the lock — the lock is session-level, so there is never a stale
+   lock to clear.
+
+   This step matters *more* since G11-OD-1 / ADR-0011, not less. A Control left running will lose its
+   lock when the database goes away and correctly **pause** — but the keeper then re-attempts
+   acquisition every `brain_singleton_reacquire_interval_sec` (default 5s), so the moment the restored
+   database accepts connections it re-acquires and **resumes dispatching against the restored data on
+   its own**, mid-procedure and before you have completed step 3's ownership re-verification. Pausing
+   is a safety property for a *transient* outage; it is not a substitute for stopping the process
+   during a deliberate restore.
+2. Restore the database by your provider's procedure (`pg_restore`, Supabase PITR, snapshot
+   rollback). This module does not prescribe one.
+3. **Re-verify roles and ownership.** A restore into a fresh cluster can land the `send_managed` schema
+   under the wrong owner, which silently breaks a load-bearing property: `FORCE ROW LEVEL SECURITY`
+   on `send_managed.accounts` only enforces because the schema is owned by the non-login, non-superuser
+   `send_managed_owner` role. Confirm it (read-only):
+
+   ```sql
+   SELECT n.nspname, pg_get_userbyid(n.nspowner) AS owner
+     FROM pg_namespace n WHERE n.nspname = 'send_managed';                 -- expect send_managed_owner
+   SELECT relname, relrowsecurity, relforcerowsecurity
+     FROM pg_class WHERE relname = 'accounts';                       -- expect t, t
+   SELECT rolcanlogin, rolsuper FROM pg_roles WHERE rolname = 'send_managed_owner';  -- expect f, f
+   ```
+
+   If any of these are wrong, fix them before accepting traffic. The install guide's roles/grants
+   step is the reference: [`install-and-deploy.md`](./install-and-deploy.md).
+4. Run migrations. The runner is self-tracking and idempotent — on an up-to-date restore it applies
+   nothing, which is the expected and desired outcome.
+5. Confirm the master key is present and paired (§1), then start the Control.
+6. Verify with `/readyz` (DB reachable **and** singleton lock held) and then a real send. Reading
+   the health endpoint: [`operator-runbook.md`](./operator-runbook.md).
+
+#### Total-loss rebuild
+
+Losing the host but not the database or the key is an ordinary redeploy — follow
+[`install-and-deploy.md`](./install-and-deploy.md) and skip the parts that create state. Workers are
+stateless and disposable: rebuild one from its cert + `WORKER_ID` + `WORKER_TOKEN` and it re-registers.
+The order that matters is **key present → migrations current → Control up → workers up**, because a worker
+with nothing to connect to simply retries, whereas a Control without its key fails at send time.
+
+---
+
+### 3. Credential and key rotation
+
+`credential_key_id` exists for exactly this. Every ciphertext carries the label of the key that
+wrote it, and the Control refuses to decrypt a row labelled with a key it does not resolve — an
+explicit rotation error, never a silent wrong-key attempt.
+
+#### What can and cannot be rotated concurrently
+
+The constraint that shapes every procedure below: **a Control resolves exactly one
+`credential_key_id`** — the value of its `CREDENTIAL_KEY_ID` env var. There is no multi-key
+keyring. So there is no window in which rows under two labels are both sendable. That rules out the
+obvious "flip the writer, drain the readers" approach and makes the safe ordering the one below.
+
+#### Rotating an individual account's SMTP password (routine, no key involved)
+
+This is the common case and needs no procedure beyond the API: `PATCH /v1/admin/accounts/{id}` with
+`smtp_secret` re-encrypts under the current key with a fresh nonce, in one transaction, and writes
+an audit row. In-flight sends already hold a decrypted copy for their one send and are unaffected;
+the next dispatch picks up the new secret. No restart, no downtime.
+
+Do this whenever a provider password changes, and always after an `auth_failure` quarantine — see
+the runbook's "An account got quarantined".
+
+#### Rotating the master key (re-encrypting every credential)
+
+**Prerequisite that has no workaround: you must have every account's plaintext SMTP password.** The
+system cannot help you here, and this is not an oversight — the admin surface holds an *Encrypt-only*
+primitive with no Decrypt method, so no operator-facing route can read a credential back out
+(CLAUDE.md Rule 6). Re-encryption is therefore **re-entry**, not a server-side transform.
+
+That is a real limitation, and it is the honest state of V1: a server-side bulk re-encrypt would
+require a Control-side rotation path that can decrypt-under-old and encrypt-under-new. That capability
+does not exist and is registered in [`future-work.md`](./future-work.md); building it here would be a
+new feature, not polish.
+
+Safe ordering — the sequence that never leaves a row unreadable while dispatch is live:
+
+1. **Prepare.** Generate the new key (32 random bytes) and choose the next label:
+   `cred-dek-v1` → `cred-dek-v2`. Back the new key up **before** using it (§1) — a key you rotate to
+   and then lose is the §1 disaster with extra steps. Collect every account's plaintext password.
+2. **Announce a send freeze.** Set `dispatch_mode=accept_and_defer` (a `PUT` to
+   `/v1/admin/config/dispatch_mode`). It halts sending cleanly with zero job loss, is resumable, and
+   deliberately keeps `POST /v1/run` accepting — a key rotation is not a reason to start losing the
+   platform's submissions. Queued jobs wait. Confirm `dispatch.dispatch_rung: "accept_and_defer"` on
+   the health endpoint before continuing; do not settle for `dispatch_paused: true`, which is also
+   true at the two deeper rungs and cannot tell you which one you are at. (`dispatch_enabled=false`
+   still works and lands you at the same rung — it is the older dial and is retained. Use whichever,
+   but verify with `dispatch_rung`, because pulling one while the other is already down is how half a
+   halt goes unnoticed.)
+3. **Cut the key over.** Install the new key file, set `CREDENTIAL_KEY_ID` to the new label, restart
+   the Control. Every existing row is now labelled with the *old* key and is unreadable — this is
+   precisely why step 2 came first. Do not skip it and do not reorder these two.
+4. **Re-enter every credential.** `PATCH /v1/admin/accounts/{id}` with `smtp_secret` for each
+   account; each write re-encrypts under the new key and re-stamps `credential_key_id`. Track
+   progress against the DB, not against your list (read-only):
+
+   ```sql
+   SELECT credential_key_id, COUNT(*) FROM send_managed.accounts GROUP BY 1 ORDER BY 1;
+   ```
+
+5. **Verify before unfreezing.** The count under the old label must be **zero**. Any row still on the
+   old label will fail at send time, so check, do not assume:
+
+   ```sql
+   SELECT id, smtp_host, smtp_username FROM send_managed.accounts
+    WHERE credential_key_id <> '<new label>';       -- expect no rows
+   ```
+
+6. **Prove one real decrypt.** Re-enable dispatch and watch a single job reach `sent`. A clean
+   startup proves nothing about the key (§1) — only a completed send does.
+7. **Retire the old key.** Keep it until step 5 returns zero rows *and* step 6 passes, then destroy
+   it and remove its backups. Keeping a superseded key indefinitely widens the blast radius of a
+   backup compromise for no benefit.
+
+If the rotation must be abandoned mid-way, roll **back**: restore the old key file and old
+`CREDENTIAL_KEY_ID`, restart, and re-enter the credentials of any accounts already moved to the new
+label (they are now the unreadable ones). This is symmetric to step 4 — which is the argument for
+doing the whole thing inside one freeze window rather than incrementally.
+
+#### Rotating the operator admin key or platform service token
+
+Both are stored as bcrypt hashes, comma-separated — which makes rotation zero-downtime, because the
+Control accepts *any* configured hash:
+
+1. Mint a new key (`provision-worker admin-key`, which prints the plaintext and its bcrypt hash) and
+   **append** the hash to `ADMIN_API_KEY_HASHES`
+   (or `PLATFORM_TOKEN_HASHES`), keeping the old one. Restart.
+2. Move every caller to the new key.
+3. Remove the old hash. Restart.
+
+Never let the list go empty by accident: an empty `ADMIN_API_KEY_HASHES` **unmounts the admin API**
+(fail-closed by design) and you will lose the surface you are using to fix things. The two domains
+never share a credential — rotate them independently.
+
+#### Rotating the mTLS CA or a worker cert
+
+A worker's authority is its **registration token**, not its certificate; the cert is transport
+auth/confidentiality. That splits the work:
+
+- **One worker's leaf cert:** re-issue from the existing CA, deploy to that worker, restart it. It
+  re-registers. No Control change.
+- **The CA:** every leaf must be re-issued and every worker restarted, plus the Control's own
+  `MTLS_CA_CERT`. Do the Control last, so workers are already carrying certs the new root can verify.
+  Plan a maintenance window; there is no dual-trust-root mode.
+- **Decommissioning a worker:** clear or rotate `send_managed.boxes.token_hash`. It is refused on its next
+  connect *regardless of a still-valid cert* — that is the intended kill path, and it is why cert
+  revocation infrastructure is not required to remove a worker. **Then stop the worker process**, because
+  the SQL alone does not disconnect a worker that is currently connected — see §4a. For a routine
+  decommission you are stopping it anyway, so the order barely matters; for a *compromise* it is the
+  whole procedure.
+
+---
+
+### 4. What to do in the first five minutes of a suspected key compromise
+
+Not a drill — the case where you believe the master key or a backup copy leaked. For a compromised
+**worker** the first move is different and the order matters — see §4a.
+
+1. **Assume every SMTP credential is exposed.** The key decrypts all of them. This is a provider-side
+   incident before it is a this-system incident.
+2. **Stop the bleeding at the providers**, not here. Change the SMTP passwords at each provider. That
+   invalidates the leaked plaintext regardless of what happens to the key.
+3. `dispatch_mode=accept_and_defer` while credentials are stale, so the system is not hammering
+   providers with passwords that no longer work (which would otherwise drive `auth_failure`
+   quarantines across the pool). Keep intake open — `accept_and_defer`, not `refuse_new`; the
+   incident is on the sending side, and refusing submissions adds a second outage to the first.
+   Verify with `dispatch.dispatch_rung`.
+4. Rotate the master key and re-enter the new passwords in one pass — §3's procedure does both,
+   since re-entry is required either way.
+5. Review who could reach the backups (§1's table), and treat the audit trail as evidence:
+   `send_managed.account_events` records every credential write with a request id, and it is never swept.
+
+---
+
+### 4a. What to do in the first five minutes of a suspected WORKER compromise
+
+A different incident from §4, with a different first move — and the one place where doing the obvious
+thing first does **not** stop the bleeding.
+
+**The trap:** clearing `send_managed.boxes.token_hash` is checked only during the register handshake. A worker
+that is *already* connected keeps its stream, and the Control keeps pushing jobs to it from its
+in-memory registration — each push carrying one freshly decrypted SMTP credential. The revocation SQL
+stops the worker coming *back*; it does not stop it *now*. Run it and walk away and the attacker keeps
+harvesting a new credential per job while your ticket says "worker evicted".
+
+1. **Cut the worker off the network, or kill the host.** Firewall its route to the Control's `:8444`, or
+   stop the instance. This is the step that actually ends credential flow. The stream is the worker's own
+   outbound connection, so nothing the Control does terminates it.
+   - If you cannot reach the host, `dispatch_mode=accept_and_defer` is the blunt Control-side stop —
+     it halts dispatch to *every* worker, which is the right trade for a few minutes. Do **not** use
+     `stopped` here: it also stops the reclaim sweep, so the jobs already leased to the compromised
+     worker would sit in `assigned`/`sending` instead of being reclaimed and re-dispatched to a
+     healthy one once you have evicted it.
+2. **Then revoke:** clear/rotate `send_managed.boxes.token_hash` and set `status='disabled'`, so it is
+   refused if it ever reconnects.
+3. **Rotate the SMTP passwords of every account that dispatched to that worker** while it may have been
+   compromised. `SELECT DISTINCT assigned_account_id FROM send_managed.jobs WHERE assigned_box_id = '<worker>'
+   AND updated_at > '<suspected start>';` gives you the list. Do not skip this because the worker was
+   stopped: shutdown does **not** zero the in-flight credential (`security-posture.md` §3.12), and a
+   worker that ran for a while saw many accounts.
+4. **Distrust what that worker reported.** A compromised worker can report any outcome for a job it
+   legitimately held — including `accepted` for mail never sent, and fabricated `auth_failure`s that
+   may already have quarantined healthy accounts (`security-posture.md` §3.15). Review
+   `send_managed.account_events` for quarantines in the window and un-quarantine what the worker lied about;
+   treat `sent` rows from that worker as unverified.
+5. **The master key is not exposed.** A worker holds no key material and cannot decrypt anything, so this
+   is not a §4 incident unless you have separate evidence. Do not rotate the master key reflexively —
+   it costs re-entry of every password for no gain here.
+6. Re-issue that worker's leaf cert before reusing the host, and mint a **new** registration token; never
+   redeploy the old token.
+
+---
+
 ## Where to go next
 
 | You need | Read |
@@ -1114,8 +1945,8 @@ bug to file, not a page. Volume and pattern are what distinguish the two, and th
 | A config key's meaning, type, or default | [`config-reference.md`](./config-reference.md) |
 | A request/response shape or an error code | [`api-contract.md`](./api-contract.md) |
 | To add/remove a worker, redeploy, or roll back | [`install-and-deploy.md`](./install-and-deploy.md) |
-| To recover from a disaster or rotate keys | [`disaster-recovery.md`](./disaster-recovery.md) |
-| To size a deployment | [`capacity-planning.md`](./capacity-planning.md) |
-| To wire up monitoring and alerting | [`monitoring.md`](./monitoring.md) |
+| To recover from a disaster or rotate keys | [Disaster recovery, key backup, and rotation](#disaster-recovery-key-backup-and-rotation) (below) |
+| To size a deployment | [Capacity planning](#capacity-planning) (below) |
+| To wire up monitoring and alerting | [Monitoring and alerting](#monitoring-and-alerting) (below) |
 | To understand how the system is shaped | [`architecture.md`](./architecture.md) |
 | To know why something is absent | [`future-work.md`](./future-work.md) |

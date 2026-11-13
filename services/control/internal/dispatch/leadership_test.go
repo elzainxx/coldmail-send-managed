@@ -416,7 +416,7 @@ func TestSingletonReacquireDisabledStaysPaused(t *testing.T) {
 
 // advisoryLockHeld reports whether ANY session in this database holds the Control singleton advisory
 // lock. Scoped to the current database (each dispatch test runs on its own clone) and to the exact
-// key, reassembled from classid/objid the same way Docs/advisory-locks.md documents.
+// key, reassembled from classid/objid the same way Docs/architecture.md#advisory-lock-key-registry documents.
 func advisoryLockHeld(t *testing.T, admin *pgx.Conn) bool {
 	t.Helper()
 	var n int

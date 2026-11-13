@@ -48,7 +48,7 @@ func (s *Server) createJob(ctx context.Context, jobItemID, userID string) (jobID
 
 	// Serialize concurrent campaign-start checks for THIS user (transaction-scoped: auto-released
 	// on commit/rollback, no unlock call needed). hashtext() keeps the key namespace distinct from
-	// both the Control singleton lock and the migration runner's lock (Docs/advisory-locks.md).
+	// both the Control singleton lock and the migration runner's lock (Docs/architecture.md#advisory-lock-key-registry).
 	if _, err := tx.Exec(ctx,
 		`SELECT pg_advisory_xact_lock(hashtext('send_managed.campaign_start:' || $1::text))`, userID); err != nil {
 		return "", false, newErr(codeInternalError, "advisory_lock_failed")

@@ -2,7 +2,7 @@ package adminapi
 
 // health_errors_window_test.go — GET /v1/admin/health's errors_last_window counts ONE failure ONCE.
 //
-// WHY THIS EXISTS. Found walking Stage 9 of Docs/coldmail-send-managed-local-test-guide.md against the live
+// WHY THIS EXISTS. Found walking Stage 9 of Docs/install-and-deploy.md#part-7--developing-and-testing-locally against the live
 // docker stack. queryErrorsInWindow was `COUNT(*) FROM send_managed.job_events WHERE error_class IS NOT
 // NULL`, and send_managed_0008's triggers copied the job row's STICKY last_error_class onto EVERY event
 // (fixed in the trigger by send_managed_0022). So a single requeue produced four tagged rows — the requeue
@@ -10,7 +10,7 @@ package adminapi
 // endpoint reported errors_last_window {"unknown": 4} for ONE failure.
 //
 // That is an operator-facing harm, not a cosmetic one: Docs/operator-runbook.md's "Sends are failing"
-// triage reads this number FIRST to size an incident, and Docs/monitoring.md graphs it. A 4x
+// triage reads this number FIRST to size an incident, and Docs/operator-runbook.md#monitoring-and-alerting graphs it. A 4x
 // over-count mis-sizes a real incident and manufactures phantom ones.
 //
 // job_events is append-only by design (send_managed_0008's reject-update trigger + the REVOKE), so the

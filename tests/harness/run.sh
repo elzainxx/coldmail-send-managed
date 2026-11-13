@@ -332,7 +332,7 @@ fi
 #
 # The `sed` is REQUIRED, not tidying. Item 10 added the contract's checks{} map, which carries a
 # SECOND "singleton_lock":true inside it, so a bare grep would match the nested copy and keep
-# passing even if the top-level field — the one Docs/monitoring.md tells an uptime monitor to alert
+# passing even if the top-level field — the one Docs/operator-runbook.md#monitoring-and-alerting tells an uptime monitor to alert
 # on — were deleted. That would make this anti-vacuity check itself vacuous. Strip the checks object
 # first, then grep what remains, so this asserts the TOP-LEVEL field specifically.
 # `[^}]*` is safe because checks{} is a flat object of name->bool; readyz_test.go's

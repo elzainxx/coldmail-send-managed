@@ -189,7 +189,7 @@ if grep -qF "$CANARY" <<<"$LOGS"; then bad "S1: the canary credential appears in
 # mechanism: AUTH LOGIN base64s the secret ALONE (padded, and unpadded in case of a trimming
 # encoder), while AUTH PLAIN base64s "\0user\0secret" as ONE blob in which the secret's own base64
 # does NOT appear as a substring. Checking only the first form would miss an AUTH PLAIN dump.
-# Found walking Docs/coldmail-send-managed-local-test-guide.md Stage 5, whose step 4 requires exactly this.
+# Found walking Docs/install-and-deploy.md#part-7--developing-and-testing-locally Stage 5, whose step 4 requires exactly this.
 CANARY_B64="$(printf '%s' "$CANARY" | base64 | tr -d '\n')"
 CANARY_B64NP="${CANARY_B64//=/}"
 CANARY_PLAIN_B64="$(printf '\0%s\0%s' "sender@ourdomain.com" "$CANARY" | base64 | tr -d '\n')"

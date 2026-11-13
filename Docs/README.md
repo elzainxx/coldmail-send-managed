@@ -13,11 +13,11 @@ Start at the [root README](../README.md) if you have not already.
 | [`install-and-deploy.md`](./install-and-deploy.md) | How do I stand this up on a real server, from a bare VPS to a verified first send? How do I add a worker, redeploy, roll back? What is the safe migration/deploy ordering? |
 | [`operator-runbook.md`](./operator-runbook.md) | Something is broken — what do I do? Diagnostic trees for the real failure modes. |
 | [`go-live-checklist.md`](./go-live-checklist.md) | What must be confirmed before the first live deployment? |
-| [`disaster-recovery.md`](./disaster-recovery.md) | KMS key backup and recovery, DB restore, credential/key rotation. **Read the key-backup section before going live** — losing the master key is unrecoverable. |
-| [`monitoring.md`](./monitoring.md) | Where do I point uptime monitoring and the alert webhook? |
-| [`capacity-planning.md`](./capacity-planning.md) | How many accounts do I need for N sends/day, and what binds first? |
-| [`send-managed-local-test-guide.md`](./send-managed-local-test-guide.md) | How do I verify the whole system on a dev machine before deploying? The 13-stage local gate, and the honest list of what local testing cannot prove. |
-| [`smoke-test-real-provider.md`](./smoke-test-real-provider.md) | The first-contact-with-a-real-provider procedure. Written, deliberately not yet run. |
+| [`operator-runbook.md`](./operator-runbook.md#disaster-recovery-key-backup-and-rotation) | KMS key backup and recovery, DB restore, credential/key rotation. **Read the key-backup section before going live** — losing the master key is unrecoverable. |
+| [`operator-runbook.md`](./operator-runbook.md#monitoring-and-alerting) | Where do I point uptime monitoring and the alert webhook? |
+| [`operator-runbook.md`](./operator-runbook.md#capacity-planning) | How many accounts do I need for N sends/day, and what binds first? |
+| [`install-and-deploy.md`](./install-and-deploy.md#part-7--developing-and-testing-locally) | How do I verify the whole system on a dev machine before deploying? The 13-stage local gate, and the honest list of what local testing cannot prove. |
+| [`go-live-checklist.md`](./go-live-checklist.md#real-provider-smoke-test-the-first-live-send) | The first-contact-with-a-real-provider procedure. Written, deliberately not yet run. |
 
 ## Reference (the integrator/extender tier)
 
@@ -28,8 +28,8 @@ Start at the [root README](../README.md) if you have not already.
 | [`architecture.md`](./architecture.md) | The system's shape — services, boundaries, send path, where each guarantee is enforced. | — |
 | [`security-posture.md`](./security-posture.md) | What is protected, how, and the honest residual risks. The page to hand a security reviewer. | — |
 | [`future-work.md`](./future-work.md) | What is deliberately **not** built, and why it was deferred. | — |
-| [`advisory-locks.md`](./advisory-locks.md) | Every advisory-lock key in the repo + the reserved band. | — |
-| [`load-test-results.md`](./load-test-results.md) | The measured single-Control throughput ceiling (committed artifact, not a dashboard). | — |
+| [`architecture.md`](./architecture.md#advisory-lock-key-registry) | Every advisory-lock key in the repo + the reserved band. | — |
+| [`operator-runbook.md`](./operator-runbook.md#measured-throughput-ceiling-e11-load-test) | The measured single-Control throughput ceiling (committed artifact, not a dashboard). | — |
 | `config-manifest.txt`, `config-consumers.txt` | Machine-readable inputs to the config gates. Not prose — do not hand-edit without re-running the gates. | both config gates |
 | `send_managed_backend_architecture.svg`, `send_managed_job_lifecycle_states.svg` | The canonical diagrams. | — |
 

@@ -13,7 +13,7 @@ import (
 // configWriteLockKey serializes ALL config writes against each other, so the ordering-invariant
 // check in handleConfigPut cannot be defeated by two concurrent PUTs to the two halves of one
 // invariant pair. In the module's reserved 9-billions advisory-lock band and registered in
-// Docs/advisory-locks.md; transaction-scoped, so commit/rollback always releases it.
+// Docs/architecture.md#advisory-lock-key-registry; transaction-scoped, so commit/rollback always releases it.
 const configWriteLockKey int64 = 9_300_000_001
 
 // handleConfigList: GET /v1/admin/config → { "items": [ <config object>, … ] }.
@@ -81,7 +81,7 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 	// INVERTED pair in send_managed.config. That wedges the dispatch AND reclaim loops on every tick
 	// (config_ordering_violation at load) while /readyz stays green. Serializing config writes costs
 	// nothing — they are rare operator actions, never on a hot path — and the lock is xact-scoped so
-	// it is released by commit/rollback, including on panic. See Docs/advisory-locks.md.
+	// it is released by commit/rollback, including on panic. See Docs/architecture.md#advisory-lock-key-registry.
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		s.fail(w, r, newErr(codeInternalError, "config_tx_begin_error: "+err.Error()))

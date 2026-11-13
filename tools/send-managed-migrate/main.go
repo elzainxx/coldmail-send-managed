@@ -22,7 +22,7 @@ import (
 
 const (
 	// Advisory lock held only for the duration of an up/down/status run. Distinct from the
-	// Control singleton key (9_200_000_001). Registered in docs/advisory-locks.md.
+	// Control singleton key (9_200_000_001). Registered in docs/architecture.md#advisory-lock-key-registry.
 	migrateAdvisoryLockID   int64 = 9_100_000_001
 	defaultLockTimeout            = "10s"
 	defaultStatementTimeout       = "300s"

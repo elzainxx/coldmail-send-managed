@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# postgres_outage — the DATABASE-OUTAGE DRILL, scripted. Docs/send-managed-local-test-guide.md, Stage 9 step 8:
+# postgres_outage — the DATABASE-OUTAGE DRILL, scripted. Docs/install-and-deploy.md#part-7--developing-and-testing-locally, Stage 9 step 8:
 #   "the Control halts cleanly, does not crash-loop, and INVENTS NOTHING — no job is marked sent or failed during the
 #    outage. On recovery it resumes with no double-processing. This is the single most important assertion in the guide."
 #

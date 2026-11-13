@@ -183,7 +183,7 @@ services:
       # Node sink (services/worker/test/sink.mjs). A CONTROLLABLE SINK SERVICE reachable from this
       # compose network DOES NOT EXIST — an earlier version of this comment claimed one lived in
       # tests/harness; it was never built. Registered in Docs/future-work.md §6; see also the
-      # Stage 9 preamble in Docs/coldmail-send-managed-local-test-guide.md.
+      # Stage 9 preamble in Docs/install-and-deploy.md#part-7--developing-and-testing-locally.
       MP_SMTP_AUTH_ACCEPT_ANY: "true"
       MP_SMTP_TLS_CERT: /certs/sink.crt
       MP_SMTP_TLS_KEY:  /certs/sink.key

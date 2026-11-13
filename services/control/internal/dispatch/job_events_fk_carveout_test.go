@@ -11,7 +11,7 @@ package dispatch
 //	  ERROR: send_managed.job_events is append-only: UPDATE forbidden (SQLSTATE 23000)
 //	CONTEXT: SQL statement "UPDATE ONLY "send_managed"."job_events" SET "account_id" = NULL WHERE …"
 //
-// Found walking Stage 12 step 7 of Docs/coldmail-send-managed-local-test-guide.md, on real infra: cleaning up
+// Found walking Stage 12 step 7 of Docs/install-and-deploy.md#part-7--developing-and-testing-locally, on real infra: cleaning up
 // a throwaway account that had actually SENT mail returned 500 from an endpoint api-contract.md
 // documents as "hard delete (audit row survives)" → 204. An account with no job_events rows returned
 // 204, because SET NULL then matches no row and issues no UPDATE — which is exactly why the defect

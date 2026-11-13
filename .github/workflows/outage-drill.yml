@@ -5,7 +5,7 @@
 # Why a separate workflow and not a step in real-infra.yml: the per-push CI deliberately runs the RAM-backed Postgres (DEV_RAM_PG=1)
 # for speed, and a RAM-backed Postgres cannot be outage-drilled — `docker stop` destroys the database. This runs the OTHER mode, where
 # the data lives in a volume, so (1) the whole harness is proven in that mode too (it had never been run for this module), and (2) the
-# drill (tests/harness/drills/postgres_outage.sh — Docs/send-managed-local-test-guide.md Stage 9 step 8) can stop and start the real
+# drill (tests/harness/drills/postgres_outage.sh — Docs/install-and-deploy.md#part-7--developing-and-testing-locally Stage 9 step 8) can stop and start the real
 # database with a job genuinely in flight and check that the Control halts cleanly and INVENTS NOTHING. It runs on a runner, not on a
 # developer machine, because the result that counts is the one on the real runner — and because the local VM cannot hold it.
 name: outage-drill

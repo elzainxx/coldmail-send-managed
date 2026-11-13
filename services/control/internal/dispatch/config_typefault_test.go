@@ -26,7 +26,7 @@ func (e *dispatchEnv) setConfigRaw(t *testing.T, key, rawJSON string) {
 }
 
 // TestConfigTypeFault_IsNotADBOutage (§2.1 classification; found 2026-07-28 walking Stage 6 of
-// Docs/coldmail-send-managed-local-test-guide.md, "an invalid config type does not wedge the Control").
+// Docs/install-and-deploy.md#part-7--developing-and-testing-locally, "an invalid config type does not wedge the Control").
 //
 // A WRONG-TYPE config value and a DB outage are different faults with different correct operator
 // responses, and the §2.1 gate must not confuse them. This is the sibling of

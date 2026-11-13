@@ -19,7 +19,7 @@ package dispatch
 // can make an account immediately ineligible until reset — expected admin behavior"). So this test
 // does NOT assert a fix; it PINS the asymmetry, because the runbook now documents it as the reason an
 // operator must add an account rather than wait or hand-edit `paused`. Found walking Stage 8 of
-// Docs/coldmail-send-managed-local-test-guide.md: raising a real paused account's limit from 5 to 500 (495
+// Docs/install-and-deploy.md#part-7--developing-and-testing-locally: raising a real paused account's limit from 5 to 500 (495
 // units of headroom) left it ineligible, and /unpause returned 422.
 //
 // ANTI-VACUITY: the two shapes are asserted to DIFFER from each other after the identical limit

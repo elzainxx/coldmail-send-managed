@@ -455,7 +455,7 @@ ORDER BY p.created_at`
 //	(1) HISTORY. Before send_managed_0022, send_managed_0008's triggers copied the job row's STICKY
 //	    last_error_class onto EVERY event, so one requeue left four tagged rows — the requeue plus
 //	    the following queued->assigned, assigned->sending, and sending->SENT. Observed live at
-//	    Stage 9 of Docs/coldmail-send-managed-local-test-guide.md: errors_last_window read
+//	    Stage 9 of Docs/install-and-deploy.md#part-7--developing-and-testing-locally: errors_last_window read
 //	    {"unknown": 4} for a single failure. job_events is append-only (by REVOKE and by trigger),
 //	    so those rows were deliberately NOT rewritten; filtering here makes the metric correct
 //	    IMMEDIATELY on deploy instead of only after health_metrics_window_sec rolls them out.

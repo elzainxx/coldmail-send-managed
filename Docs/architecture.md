@@ -1,10 +1,12 @@
-# Architecture overview (living)
+# Architecture
 
 **What this is:** the system's shape — the services, the boundaries between them, the data flow,
 and where each guarantee is enforced. It is the "how is this built" document. It deliberately does
 **not** restate config keys (`config-reference.md`) or endpoint shapes (`api-contract.md`), and it
 no longer carries the per-phase build diary — that moved to `history/phase-build-record.md`, which
-is provenance rather than documentation.
+is provenance rather than documentation. (Until 2026-11-09 this file was
+`architecture-overview.md`, and the advisory-lock registry below was its own page,
+`advisory-locks.md`.)
 
 Canonical diagrams: `send_managed_backend_architecture.svg` and
 `send_managed_job_lifecycle_states.svg` (both in this directory).
@@ -77,7 +79,7 @@ The job state machine (`queued → assigned → sending → sent`, plus `sending
 | Exactly-once job pickup | `FOR UPDATE SKIP LOCKED` CTE + partial claim index | DB + `internal/dispatch` |
 | No double-send under retry/replay | `provider_message_id UNIQUE` + attempt token + pre-persist idempotency check | DB + `internal/dispatch` |
 | Append-only audit | `job_events` / `account_events` triggers + `REVOKE UPDATE, DELETE` | DB (`send_managed_0008`, `send_managed_0014`) |
-| Exactly one active Control | session-level advisory lock, fixed key | `internal/singleton` (`Docs/advisory-locks.md`) |
+| Exactly one active Control | session-level advisory lock, fixed key | `internal/singleton` ([registry](#advisory-lock-key-registry)) |
 | Control is sole decryptor | `internal/credential` wired only into `internal/dispatch`; KMS IAM grants Decrypt to the Control role only | code + cloud IAM (not code-checkable — see `security-posture.md`) |
 | Worker holds no persistent secret | no DB driver, no KMS SDK shipped; in-memory creds zeroed on every **send-path** exit (not on shutdown — `security-posture.md` §3.12) | `services/worker` (structural) |
 | Credential never crosses a client boundary | two-vocabulary error rule; `no_secret_leak` CI gate (worker token) + the send-path harness's SMTP-credential canary scan | `internal/adminapi`, CI |
@@ -107,12 +109,54 @@ reduce what the system does" rule `dispatch_enabled` follows as a FLOOR, stated 
 `variation_enabled`, and `alert_webhook_url` (empty = alerting off). Their exact semantics and
 defaults are in `config-reference.md`; when and how to flip them is `operator-runbook.md`.
 
+## Advisory-lock key registry
+
+Every Postgres advisory-lock key used in this repo is registered here so a future consumer
+greps one file instead of discovering a collision in prod.
+
+**Reserved key band (OD-10, ruled 2026-07-23):** the send_managed module reserves the
+**`9_000_000_000 – 9_999_999_999`** single-key advisory-lock space (the "9-billions" band).
+The platform owner (who owns the platform DB) treats this band as reserved for the send_managed
+module; the platform's own advisory locks MUST NOT use keys in it. This is the documented,
+reserved namespace that guarantees no collision on the shared instance.
+
+| Key | Consumer | Scope | Notes |
+|---|---|---|---|
+| `9_100_000_001` | `tools/send-managed-migrate` migration runner | held only during `up`/`down`/`status` | prevents two migrators racing on the shared DB |
+| `9_200_000_001` | Control singleton guard (`internal/singleton`) | session-level; held for the Control's lifetime **but not guaranteed to be** — see the note below | SIGKILL auto-releases (no stale lock) |
+| `9_300_000_001` | Config-write serializer (`internal/adminapi` `handleConfigPut`) | transaction-scoped (`pg_advisory_xact_lock`); auto-released on commit/rollback | Serializes ALL `PUT /v1/admin/config/{key}` writes against each other, so the ordering-invariant check cannot be defeated by two concurrent PUTs to the two halves of one invariant pair (without it, each read a counterpart value that was valid when it read, both passed, and an inverted pair landed — wedging both dispatch and reclaim at config-LOAD). Config writes are rare operator actions, never on a hot path, so global serialization costs nothing. Added by Phase 10's R4 gate. |
+| `hashtext('send_managed.campaign_start:' \|\| user_id)` | `internal/platformapi` `createJob` (Phase 4 §8, P4-7) | transaction-scoped (`pg_advisory_xact_lock`); auto-released on commit/rollback | Per-user lock serializing the one-active-campaign-per-user check-then-insert; a DYNAMIC key (hash of `send_managed.campaign_start:<user_id>`), not a fixed reserved value, so it is exempt from the fixed-key registry above by construction (the spec's own §8 pseudocode). `hashtext` returns a 32-bit hash spread across the full `int4` range (positive and negative), so it is not confined to the reserved `9_000_000_000–9_999_999_999` band, but the collision surface is a different user's SAME lock call, not the migration runner or the Control singleton (whose keys are fixed literals far outside `hashtext`'s typical output) — practically negligible, and the lock's blast radius on a false collision is a serialized (not incorrect) check, never data corruption. |
+
+> **The singleton lock can be LOST mid-life, and that is designed for (G11-OD-1 / ADR-0011).**
+> "Session-level" cuts both ways: the lock survives as long as its session does, so a Postgres restart,
+> a failover, a connection reaper, or a `pg_terminate_backend` on the lock session drops it while the
+> Control keeps running. This was observed live on 2026-07-29 — the lock went to **zero holders** and the
+> Control kept dispatching for 56 minutes, letting a second Control acquire it. Since the fix, a Control that
+> loses the lock **pauses** dispatch/reclaim/retention (it claims nothing and pushes nothing) and the
+> keeper re-attempts acquisition every `brain_singleton_reacquire_interval_sec` (default 5s), so
+> "exactly one dispatcher" holds across a loss rather than only from startup. Consequently a query for
+> holders of this key returning **zero rows** does not mean no Control is running — it means no Control is
+> currently entitled to dispatch. The operator triage for that state is in
+> [`operator-runbook.md`](./operator-runbook.md#readyz-says-singleton_lockfalse-on-a-control-that-was-ready-mid-life-lock-loss).
+
+> **OD-10 — pre-live setup step (not a build blocker):** before Phase 1 runs against the
+> live platform DB, confirm with platform-db that the platform's own migrator/advisory locks
+> avoid the reserved `9_000_000_000–9_999_999_999` band above. `pg_advisory_lock` scoping is
+> per-database, so a collision only matters when both run against the same instance
+> concurrently — which they do here. Recorded in the pre-live gate list
+([`history/pre-live-gates.md`](./history/pre-live-gates.md)) and carried as item 3 of
+[`go-live-checklist.md`](./go-live-checklist.md).
+
+---
+
 ## Provenance
 
 `history/phase-build-record.md` is the per-phase build diary (what each phase landed, which review
-gates found what). `history/open-decisions.md` is the flag-don't-fix ledger, `adr/`
-the ADRs, and `history/` the locked phase specs (12 files for 11 phases — `history/README.md` says why). See it for when to consult
-which.
+gates found what). [`open-decisions.md`](./open-decisions.md) is the living flag-don't-fix ledger (every
+ruling in force; zero open), [`history/open-decisions.md`](./history/open-decisions.md) is its frozen
+phase-0–10 predecessor, [`adr/`](./adr/) holds the ADRs, and `history/` the locked phase specs (12 files
+for 11 phases — `history/README.md` says why; documents merged into the living set on 2026-11-09 are under
+`history/merged-2026-11/`, mapped in `history/MOVED-DOCS.md`).
 
 ## Build status and the two ceilings
 
@@ -123,7 +167,7 @@ and all **six** CI gates pass (`config_drift`, `contract_drift`, `migration_lint
 has been in `.github/workflows/real-infra.yml` since it was added). Deferred work is registered in
 `future-work.md` rather than left implicit.
 
-**Open Decisions.** The pre-deploy gate walkthrough (`coldmail-send-managed-local-test-guide.md`) surfaced two
+**Open Decisions.** The pre-deploy gate walkthrough (`install-and-deploy.md#part-7--developing-and-testing-locally`) surfaced two
 new ones, **G11-OD-1** and **G12-OD-1**, and **both were ruled on 2026-07-29, implemented, tested on
 real infra, and closed**: G11-OD-1 option B (a Control that loses the singleton lock **pauses** dispatch
 and re-acquires on a bounded retry rather than exiting — ADR-0011), and G12-OD-1 option A (an FK-aware
@@ -146,8 +190,8 @@ Two capacity ceilings exist and they are different kinds of number:
 The Control's throughput only becomes the constraint once the account pool grows into the hundreds —
 which is itself the signal that a scale-out conversation is due, and scale-out is a CLAUDE.md Rule 7
 matter (one active Control, by invariant), not a knob. The arithmetic, a volume→accounts table, and
-what to measure before committing to a number are in `capacity-planning.md`; the measured run is
-`load-test-results.md`.
+what to measure before committing to a number are in `operator-runbook.md#capacity-planning`; the measured run is
+`operator-runbook.md#measured-throughput-ceiling-e11-load-test`.
 
 ## Known operational limits
 

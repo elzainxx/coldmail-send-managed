@@ -6,7 +6,7 @@ a control depends on something outside this codebase, that dependency is named r
 
 Nothing here restates config defaults or endpoint shapes; those are in
 [`config-reference.md`](./config-reference.md) and [`api-contract.md`](./api-contract.md). Procedures
-live in [`disaster-recovery.md`](./disaster-recovery.md).
+live in [`operator-runbook.md`](./operator-runbook.md#disaster-recovery-key-backup-and-rotation).
 
 ---
 
@@ -88,7 +88,7 @@ What does **not** bound it:
   outbound) stream open **continues to receive one fresh plaintext credential per job** after the
   operator has run the revocation SQL and believes the worker is evicted. **Kill the host or cut its
   network path first; the SQL is what stops it coming back, not what stops it now.** See
-  [`disaster-recovery.md`](./disaster-recovery.md) §4.
+  [`operator-runbook.md`](./operator-runbook.md#disaster-recovery-key-backup-and-rotation) §4.
 - **Persistence.** An attacker with root on a worker can keep harvesting for as long as the compromise
   goes unnoticed, and a long-lived worker that dispatch favors will see many accounts over time. There is
   no per-send attestation and no way to detect credential exfiltration from a worker from the Control side.
@@ -150,14 +150,14 @@ reviewer otherwise, and treat this as a go-live checklist item:
 The property that makes a stolen DB dump useless also means a lost key destroys every credential
 permanently. This is an accepted trade, not a defect — but it makes key backup a **security control
 in its own right**, and one whose failure mode is total. Procedure and the recovery drill:
-[`disaster-recovery.md`](./disaster-recovery.md) §1.
+[`operator-runbook.md`](./operator-runbook.md#disaster-recovery-key-backup-and-rotation) §1.
 
 ### 3.5 Master-key rotation requires re-entering every password by hand
 
 Because no operator-facing route can decrypt, re-encryption is re-entry. `credential_key_id` makes
 rotation *possible and safe* (no silent wrong-key decrypt), but there is no server-side bulk
 re-encrypt. In practice this raises the cost of rotation enough that it may be deferred — which is
-itself a risk worth naming. See [`disaster-recovery.md`](./disaster-recovery.md) §3.
+itself a risk worth naming. See [`operator-runbook.md`](./operator-runbook.md#disaster-recovery-key-backup-and-rotation) §3.
 
 ### 3.6 The operator admin key is a single, very powerful credential
 
@@ -175,7 +175,7 @@ Two gaps in what that audit trail actually captures, both worth knowing before a
   with no before value and no after value. So "when was `debug_log_retention_days` widened?" — the
   question §3.2 makes matter — is answerable only from shipped logs, for as long as their retention
   holds. Log shipping is therefore a security control here, not just an ops convenience
-  ([`monitoring.md`](./monitoring.md)).
+  ([`operator-runbook.md`](./operator-runbook.md#monitoring-and-alerting)).
 - **`account_events` records that an account was updated, not what changed.** An `updated` row
   carries identical before/after flag snapshots (`paused`, `pause_reason`, `quarantined`, `disabled`)
   and no changed-field list, so a `PATCH` that rewrote `smtp_host` is indistinguishable from a no-op
@@ -324,7 +324,7 @@ advisory database moves, so re-run `govulncheck` before a pilot carries real dat
 `/healthz` and `/readyz` are unauthenticated by design (they carry no operational detail — liveness
 and "DB reachable and singleton lock held"). Everything with real content is behind a bearer key.
 `GET /v1/admin/health` is authenticated Domain B and does expose operational state; do not wire it
-into an unauthenticated uptime check. See [`monitoring.md`](./monitoring.md).
+into an unauthenticated uptime check. See [`operator-runbook.md`](./operator-runbook.md#monitoring-and-alerting).
 
 ---
 
@@ -333,7 +333,7 @@ into an unauthenticated uptime check. See [`monitoring.md`](./monitoring.md).
 The codebase cannot check these; they are the deployment's half of the posture.
 
 - [ ] KMS Decrypt is granted to the **Control role only** (§3.3). The platform, operators, and CI have none.
-- [ ] The master key is backed up off-host, encrypted, in two locations, and the **recovery drill has been run** ([`disaster-recovery.md`](./disaster-recovery.md) §1).
+- [ ] The master key is backed up off-host, encrypted, in two locations, and the **recovery drill has been run** ([`operator-runbook.md`](./operator-runbook.md#disaster-recovery-key-backup-and-rotation) §1).
 - [ ] No worker host has `DATABASE_URL`, any KMS variable, `ca.key`, or `control.key`. Presence is an incident, not a misconfiguration.
 - [ ] Workers have **no** public ingress; worker↔Control traffic is on a private network.
 - [ ] `ADMIN_API_KEY_HASHES` and `PLATFORM_TOKEN_HASHES` are **different** credentials, each rotatable, each held by the smallest possible set.
@@ -353,7 +353,7 @@ The codebase cannot check these; they are the deployment's half of the posture.
 
 | Doc | For |
 |---|---|
-| [`disaster-recovery.md`](./disaster-recovery.md) | Key backup, the recovery drill, rotation, compromise response. |
+| [`operator-runbook.md`](./operator-runbook.md#disaster-recovery-key-backup-and-rotation) | Key backup, the recovery drill, rotation, compromise response. |
 | [`go-live-checklist.md`](./go-live-checklist.md) | The pre-launch gate, including the IAM-separation sign-off. |
 | [`architecture.md`](./architecture.md) | Boundaries and the send path in detail. |
 | [`../CLAUDE.md`](../CLAUDE.md) | The build rules these properties come from — canonical. |

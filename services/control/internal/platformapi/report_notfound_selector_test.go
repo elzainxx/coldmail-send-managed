@@ -8,7 +8,7 @@ package platformapi
 // the path (a polling integration keyed by job_item_id) where they have no job_id to go check. The
 // same handler's VALIDATION branches already distinguish the two selectors, and store.go's run/quote
 // not-founds already name job_item_id, so this one site was the outlier. Found walking
-// Docs/coldmail-send-managed-local-test-guide.md Stage 5 step 5 (tenant isolation), where the cross-tenant
+// Docs/install-and-deploy.md#part-7--developing-and-testing-locally Stage 5 step 5 (tenant isolation), where the cross-tenant
 // job_item_id probe returned a job_id detail.
 //
 // THE TENSION this test pins, and why both halves must be asserted together: making the error more

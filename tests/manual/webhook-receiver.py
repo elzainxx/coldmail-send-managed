@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """webhook-receiver.py — a logging sink for alert_webhook_url, on the compose network.
 
-WHY THIS IS TRACKED. Stage 10 step 7 of Docs/coldmail-send-managed-local-test-guide.md requires proving the
+WHY THIS IS TRACKED. Stage 10 step 7 of Docs/install-and-deploy.md#part-7--developing-and-testing-locally requires proving the
 alert webhook actually FIRES, not merely that active_conditions[] lists a condition. That needs an
 HTTP endpoint the Control container can resolve — `localhost` from the host is not reachable from
 inside the Control, so the receiver has to live on `coldmail-send-managed_default`. Doing that with an ad-hoc

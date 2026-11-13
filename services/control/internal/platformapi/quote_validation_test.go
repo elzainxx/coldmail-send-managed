@@ -5,7 +5,7 @@ package platformapi
 //
 // WHAT THIS PINS, and why it is not covered by quote_test.go: quote_test.go proves the NUMBER is
 // right. These prove the REJECTIONS are diagnosable. Two defects found walking Stage 7 of
-// Docs/coldmail-send-managed-local-test-guide.md:
+// Docs/install-and-deploy.md#part-7--developing-and-testing-locally:
 //
 //  1. `{"recipient_count": -5}` reported details[] = [recipient_count:required] — telling the caller
 //     a field it had plainly supplied was missing. run/report on the SAME server already distinguish

@@ -46,14 +46,14 @@ Nothing actually sends until `default_shared_pool_id` is set — that is expecte
 | **Install this on a real server** | [`Docs/install-and-deploy.md`](./Docs/install-and-deploy.md) |
 | **Fix something that is broken right now** | [`Docs/operator-runbook.md`](./Docs/operator-runbook.md) |
 | Go live for the first time | [`Docs/go-live-checklist.md`](./Docs/go-live-checklist.md) |
-| Recover from a disaster / rotate keys | [`Docs/disaster-recovery.md`](./Docs/disaster-recovery.md) |
+| Recover from a disaster / rotate keys | [`Docs/operator-runbook.md`](./Docs/operator-runbook.md#disaster-recovery-key-backup-and-rotation) |
 | Look up a config key or its default | [`Docs/config-reference.md`](./Docs/config-reference.md) |
 | Call the API (platform or operator) | [`Docs/api-contract.md`](./Docs/api-contract.md) |
 | Understand how the system is built | [`Docs/architecture.md`](./Docs/architecture.md) |
 | Review the security posture and residual risks | [`Docs/security-posture.md`](./Docs/security-posture.md) |
-| Size a deployment | [`Docs/capacity-planning.md`](./Docs/capacity-planning.md) — and [`Docs/load-test-results.md`](./Docs/load-test-results.md) for the measured run behind it |
-| Wire up monitoring and alerting | [`Docs/monitoring.md`](./Docs/monitoring.md) |
-| Send the first real message through a real provider | [`Docs/smoke-test-real-provider.md`](./Docs/smoke-test-real-provider.md) |
+| Size a deployment | [`Docs/operator-runbook.md`](./Docs/operator-runbook.md#capacity-planning) — and [`Docs/operator-runbook.md`](./Docs/operator-runbook.md#measured-throughput-ceiling-e11-load-test) for the measured run behind it |
+| Wire up monitoring and alerting | [`Docs/operator-runbook.md`](./Docs/operator-runbook.md#monitoring-and-alerting) |
+| Send the first real message through a real provider | [`Docs/go-live-checklist.md`](./Docs/go-live-checklist.md#real-provider-smoke-test-the-first-live-send) |
 | Know what is deliberately NOT built | [`Docs/future-work.md`](./Docs/future-work.md) |
 | **Change this code** | [`CLAUDE.md`](./CLAUDE.md) — non-negotiable build rules; read first |
 | Know why something is the way it is | [`Docs/history/`](./Docs/history/README.md) — specs, ADRs, decision ledger |

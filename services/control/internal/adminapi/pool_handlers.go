@@ -107,7 +107,7 @@ func (s *Server) handlePoolCreate(w http.ResponseWriter, r *http.Request) {
 		// owner_user_id (issueRequired vs issueMalformed above), and platformapi draws it for
 		// job_item_id/user_id; `kind` collapsed both into forbidden_value, which reads as "the value
 		// you sent is not allowed" when nothing was sent at all. Found walking the Stage 4 admin
-		// surface in Docs/coldmail-send-managed-local-test-guide.md.
+		// surface in Docs/install-and-deploy.md#part-7--developing-and-testing-locally.
 		s.fail(w, r, newErr(codeValidationFailed, "pool_kind_required").
 			withDetails(fieldDetail{Field: "kind", Issue: issueRequired}))
 		return

@@ -127,7 +127,7 @@ envelope — `{"status":"ready"|"not_ready","checks":{"<dependency>":bool},"at":
 answers `503` when any check is false. This module's checks are `db` and `singleton_lock`; the names
 live inside `checks{}` precisely so a cross-module consumer can walk the map without knowing which
 module it is talking to. The same two booleans are ALSO present at the top level, unchanged, because
-`monitoring.md` §2 tells a live uptime monitor to alert on them there; both copies derive from the
+`operator-runbook.md#monitoring-and-alerting` §2 tells a live uptime monitor to alert on them there; both copies derive from the
 same values. `/healthz` carries no `checks` — it checks nothing, and is 200 even with every
 dependency down.
 

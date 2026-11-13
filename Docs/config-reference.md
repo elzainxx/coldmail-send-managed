@@ -250,7 +250,7 @@ what "valid" means for either pair.
 
 **Config writes are serialized against each other** (Phase 10 R4). The read of the counterpart's
 value, the ordering check, and the write all happen in ONE transaction, holding a transaction-scoped
-advisory lock (`Docs/advisory-locks.md`, `9_300_000_001`) that every config `PUT` takes. Without
+advisory lock (`Docs/architecture.md#advisory-lock-key-registry`, `9_300_000_001`) that every config `PUT` takes. Without
 that, two *concurrent* PUTs — one lowering the boundary key, one raising the dependent key — each
 read a counterpart value that was still valid at the moment it read, so both passed the check and
 both committed, landing an inverted pair anyway. Serializing costs nothing (config writes are rare

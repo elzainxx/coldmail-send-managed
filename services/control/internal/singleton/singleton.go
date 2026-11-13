@@ -27,7 +27,7 @@ import (
 )
 
 // LockKey is the fixed, namespaced advisory-lock key for the Control singleton. Distinct from
-// the migration runner's key (9_100_000_001) — see docs/advisory-locks.md.
+// the migration runner's key (9_100_000_001) — see docs/architecture.md#advisory-lock-key-registry.
 const LockKey int64 = 9_200_000_001
 
 // ErrNotAcquired means another Control holds the lock and the bounded wait elapsed. Callers

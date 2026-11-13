@@ -13,7 +13,7 @@ package httpapi
 // leadership_test.go already covers the lock semantics against real Postgres). They are:
 //
 //  1. the two copies of each boolean — nested in checks{} and top-level — can never disagree;
-//  2. every pre-existing top-level field is still there, un-nested (Rule 5, and monitoring.md
+//  2. every pre-existing top-level field is still there, un-nested (Rule 5, and operator-runbook.md#monitoring-and-alerting
 //     tells a live uptime monitor to alert on those exact top-level names);
 //  3. checks{} tracks each dependency SEPARATELY, so a mixed state renders correctly rather than
 //     collapsing to one boolean;
@@ -294,7 +294,7 @@ func TestReadyz_ChecksMapAgreesWithTheTopLevelFields(t *testing.T) {
 // TestReadyz_ChecksMapTracksEachDependencySeparately: the mixed state must render as a mixed state.
 // Collapsing checks{} to one overall boolean per key would still pass every all-up/all-down test,
 // and would destroy the only reason to have a map at all — telling an operator WHICH dependency is
-// the problem. monitoring.md's two distinct alert paragraphs depend on this.
+// the problem. operator-runbook.md#monitoring-and-alerting's two distinct alert paragraphs depend on this.
 func TestReadyz_ChecksMapTracksEachDependencySeparately(t *testing.T) {
 	database, dsn := newThrowawayDB(t, "separate")
 	guard := acquireGuard(t, dsn)
@@ -313,7 +313,7 @@ func TestReadyz_ChecksMapTracksEachDependencySeparately(t *testing.T) {
 }
 
 // TestReadyz_PreExistingTopLevelFieldsAreStillThere pins Rule 5 on an operator surface. These are
-// not hypothetical consumers: Docs/monitoring.md §2 tells an uptime monitor to alert on `db:false`
+// not hypothetical consumers: Docs/operator-runbook.md#monitoring-and-alerting §2 tells an uptime monitor to alert on `db:false`
 // or `singleton_lock:false` at the TOP level, and operator-runbook.md hangs a recovery procedure
 // off the field name. Nesting them under checks{} would break a live monitor silently — it would
 // look like a successful refactor until an incident went unnoticed.
@@ -321,7 +321,7 @@ func TestReadyz_PreExistingTopLevelFieldsAreStillThere(t *testing.T) {
 	body := readyzBody(t, readyzProbe(t, nil, nil, "/readyz"))
 	for _, name := range []string{"status", "db", "singleton_lock", "at"} {
 		if _, present := body[name]; !present {
-			t.Errorf("top-level %q is GONE; monitoring.md and operator-runbook.md both document it — this change must be additive", name)
+			t.Errorf("top-level %q is GONE; operator-runbook.md#monitoring-and-alerting and operator-runbook.md both document it — this change must be additive", name)
 		}
 	}
 }
@@ -358,7 +358,7 @@ func TestReadyz_TopLevelFieldsAreDistinguishableFromTheNestedCopy(t *testing.T) 
 }
 
 // TestHealthz_IsLivenessNotReadiness: liveness must stay 200 with every dependency down. If health
-// ever started reporting dependencies, monitoring.md's central instruction — probe /readyz, not
+// ever started reporting dependencies, operator-runbook.md#monitoring-and-alerting's central instruction — probe /readyz, not
 // /healthz, because /healthz misses a lost singleton lock entirely — would become wrong.
 func TestHealthz_IsLivenessNotReadiness(t *testing.T) {
 	rec := readyzProbe(t, nil, nil, "/healthz")

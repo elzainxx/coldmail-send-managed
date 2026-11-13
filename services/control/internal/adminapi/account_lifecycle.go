@@ -32,7 +32,7 @@ type transitionSpec struct {
 // so the two-vocabulary rule (Rule 5) holds. The flag names are already public in the account
 // read model's `status` object, so naming one discloses nothing new.
 //
-// WHY: found walking Docs/coldmail-send-managed-local-test-guide.md Stage 4 as an operator. Every illegal
+// WHY: found walking Docs/install-and-deploy.md#part-7--developing-and-testing-locally Stage 4 as an operator. Every illegal
 // transition was correctly rejected and correctly wrote no audit row, but all six returned the
 // same bare `{"code":"unprocessable","message":"The request is well-formed but cannot be
 // processed."}` — indistinguishable from each other, and silent about WHICH precondition failed.

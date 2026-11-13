@@ -5,7 +5,7 @@ package dispatch
 // WHY THIS EXISTS. The operator runbook's "levers that actually exist in V1" table described account
 // rotation as "the default order prefers the highest-scoring account and exhausts it before moving
 // on; round_robin spreads instead." Two things were wrong with that sentence, and Stage 8 of
-// Docs/coldmail-send-managed-local-test-guide.md surfaced both:
+// Docs/install-and-deploy.md#part-7--developing-and-testing-locally surfaced both:
 //
 //	(1) round_robin IS the default (send_managed_0004_create_pools.up.sql's column DEFAULT and
 //	    adminapi's POST /v1/admin/pools default), so "the default order" named the wrong strategy.

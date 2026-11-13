@@ -215,6 +215,6 @@ fi
 rm -f "$RESULTS_FILE"
 
 echo
-echo "E11: record this run's numbers in Docs/load-test-results.md (OD-7 — committed, versioned doc artifact, not a dashboard)."
+echo "E11: record this run's numbers in Docs/operator-runbook.md#measured-throughput-ceiling-e11-load-test (OD-7 — committed, versioned doc artifact, not a dashboard)."
 echo "E11: this is a SCALE GATE, not a pass/fail — exiting 0 regardless of the numbers observed."
 exit 0

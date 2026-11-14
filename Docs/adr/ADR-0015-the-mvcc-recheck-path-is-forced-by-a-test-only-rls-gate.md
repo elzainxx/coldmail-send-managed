@@ -64,7 +64,7 @@ Nothing in it depends on timing: every wait is on observed state; the deadlines 
   so the gate is not guaranteed to be called again; the log records what the peer was shown and the test prints it, but only the capacity sighting and the refusal are asserted. (ii) The injection point is row-level security: if `accounts` ever lost
   RLS the policy would have no effect, the peer would never park, and the test would go red with "forced interleave did not engage" — red, not silently green. (iii) It is tied to the Postgres behaviour of the pinned `postgres:16-alpine` image.
 - **Option B is not the closing argument, but its property is visible.** With the row lock removed (`norecheck`) the stale-snapshot peer is stopped by `accounts_daily_sent_check` alone — SQLSTATE 23514 — so a double booking cannot be *committed* even if
-  the re-check were lost. That is a backstop that turns a silent over-send into an error, not a substitute for the re-check: the CHECK firing is a defect, and the test treats it as one.
+  the re-check were lost (the runner shows the peer's error under that mutant as `ERROR: new row for relation …`, the start of Postgres's CHECK-violation message). That is a backstop that turns a silent over-send into an error, not a substitute for the re-check: the CHECK firing is a defect, and the test treats it as one.
 - Reopen trigger: this test red on any runner, a mutant surviving, or a change to the consume statement's locking.
 
 ## Links

@@ -147,6 +147,18 @@ that behavior does not change. Listed most-likely-to-be-hit first.
 | **A register rejection short-circuits the documented ~30-attempt retry budget.** | `services/worker/src/stream.js` calls `this.stop()` on `accepted:false`, which sets `stopped = true`, so `connectOnce` returns immediately at the top of its next iteration. **Measured:** exit after attempt 1, ~1s, not ~30 attempts over ~30s. | The budget is real but covers **dial/TLS failures only**; a rejection is treated as terminal on purpose (an unauthorized worker hammering the Control is worse than a worker that exits for its supervisor to restart). What is wrong is the *documentation* of the budget's scope, plus the interaction with the item above. Changing the retry behavior is behavior; the doc side is being corrected. |
 | **Three inert variables in `.env.example`: `SEND_MANAGED_ALERT_WEBHOOK_URL`, `PLATFORM_SERVICE_TOKEN`, `PLATFORM_ADMIN_KEY_HASH`.** | No code reads any of the three. The webhook destination comes only from the `alert_webhook_url` config row; the live auth variables are `PLATFORM_TOKEN_HASHES` and `ADMIN_API_KEY_HASHES`, both comma-separated **bcrypt** lists — not a plaintext token, not a SHA-256. | Setting the env var and expecting alerts is a silent no-op — a config-not-code violation in an *example file*, not in the running system. Setting any of them expecting an effect is a silent no-op, and for the two auth ones the surface fails **closed** — a Domain A call returns `401` with no hint that the variable you set is not the one being read. Removing the lines is trivial but touches the example every install copies; all three are now labelled inert in `.env.example` itself, and noted in [`operator-runbook.md`](./operator-runbook.md#monitoring-and-alerting) §3 and [`install-and-deploy.md`](./install-and-deploy.md) Step 6, so nobody is misled meanwhile. |
 
+
+**Closed 2026-11-14 — the daily-limit ceiling test's proof of overlap was decided by scheduling.** `TestAccountConsume_NeverExceedsDailyLimit` (this module's copy of
+module 3's `…_ConcurrentLanes`) asserted after the fact that at least two workers had landed a success and that a `pg_stat_activity` sampler had once seen two backends
+mid-query. Under `FOR UPDATE SKIP LOCKED` nothing makes the lock fair, so one worker can take every slot before a peer is scheduled; module 3's copy failed that way on a runner
+(its run 43445719147, a commit with no executable change) and the invariants in the failing attempt held. Fixed here the same way, in `consume_contention_test.go`: the contention is
+**built** — one slot left, one consume parked on a test-held advisory-lock gate while holding it (proven via a scoped `pg_stat_activity`), seven peers released against it and all
+required to be refused while `daily_sent_count` is still `limit-1` — and the volume phase keeps every invariant but only *logs* the overlap. Proof on the GitHub runner: the gate
+`consume_contention.sh` and its four mutants (`noskip`, `mutex`, `noceiling`, `nogate`) each go red with their own signature
+([43594048091](https://github.com/elzainxx/coldmail-send-managed/actions/runs/43594048091), harness 62/0), and the `consume-contention-repeat` workflow ran the test 50 times: 50 passed,
+0 failed ([43594048182](https://github.com/elzainxx/coldmail-send-managed/actions/runs/43594048182)). The MVCC re-check path (a peer whose snapshot predates the holder's commit) cannot be
+driven from outside the statement and is still exercised only by volume.
+
 ---
 
 ## 7. The open decision — RULED AND CLOSED 2026-08-07

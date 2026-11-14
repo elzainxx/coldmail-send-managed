@@ -1064,7 +1064,7 @@ Read these first; they will each cost you an hour otherwise.
    don't take the number on faith, read the line the run prints)
 2. Run the Go suites directly. `cd services/control && go test ./...` covers all of them at once — dispatch, adminapi, platformapi, credential, workerlink, workerproto — which is safer than naming them, since a named list silently misses a new package.
 3. Run the worker Node suite (`cd services/worker && node --test "test/*.test.mjs"` — **80** tests at `96a189f`, CI run 42633655325)
-4. Run the gate scripts in `tests/harness/checks/` — 15 at `96a189f` (11 gates and 4 paired self-tests; `test_enumeration` prints the live count and fails if any is not wired into `.github/workflows/real-infra.yml`). The ones that need no running stack — `test_enumeration`, `image_pins`, `go_suite_selftest` and the three `_selftest` scripts — run anywhere with bash; the rest read the live dev stack
+4. Run the gate scripts in `tests/harness/checks/` — 17 as of 2026-11-14 (12 gates and 5 paired self-tests, the newest being `consume_contention` + its self-test, which need only the compose Postgres; `test_enumeration` prints the live count and fails if any is not wired into `.github/workflows/real-infra.yml`). The ones that need no running stack — `test_enumeration`, `image_pins`, `go_suite_selftest` and the three `_selftest` scripts — run anywhere with bash; the rest read the live dev stack
 5. `gofmt` / `go vet` clean
 
 **Pass:** every suite green, every gate green, **zero skipped tests**. A skip here is a test you think you have and don't.

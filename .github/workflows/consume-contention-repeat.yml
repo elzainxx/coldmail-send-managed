@@ -18,8 +18,6 @@ on:
         description: "How many times to run TestAccountConsume_NeverExceedsDailyLimit"
         required: false
         default: "50"
-  push:
-    branches: ["contention-fix*"]
 
 jobs:
   repeat:

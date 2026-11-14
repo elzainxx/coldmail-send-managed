@@ -104,8 +104,9 @@ preference (CLAUDE.md Rule 3). `bash scripts/dev.sh test` runs the full suite, a
 | `secret_ownership` | a dev key is loosened, or the worker's uid can read the KMS key |
 | `image_pins` | any image reference — compose, Dockerfile, workflow, shell tooling — is not pinned by digest |
 | `test_enumeration` | a test package is not run by `run.sh`, or a gate script is not wired into the workflow |
+| `consume_contention` | the daily-limit ceiling test stops FORCING contention (a consume parked on the last slot, peers refused while capacity remains), or any of four mutants — SKIP LOCKED removed, consume serialised, ceiling removed, gate disarmed — stops turning it red |
 
-Four paired self-tests (`config_consumption_selftest`, `test_enumeration_selftest`, `image_pins_selftest`,
-`go_suite_selftest`) break their gate on purpose and fail if it stays green. The live count is derived,
+Five paired self-tests (`config_consumption_selftest`, `test_enumeration_selftest`, `image_pins_selftest`,
+`go_suite_selftest`, `consume_contention_selftest`) break their gate on purpose and fail if it stays green. The live count is derived,
 not written: `test_enumeration` prints it on every run. Run any gate directly:
 `bash tests/harness/checks/<name>.sh`; the ones that read the live stack need `dev.sh reset` first.

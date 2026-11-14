@@ -442,12 +442,12 @@ the rest describe the deployed system, which does not exist yet.
 - ⏳ **PF-1** `scripts/dev.sh test` (or the prod-equivalent harness invocation) is green — full behavioral
       suite against the ACTUAL deployed images, not a stale build. *Repository side done:* 62 passed, 0 failed
       on a runner (run 42633655325). *Left for you:* running it against the images you actually deploy.
-- ✅ **PF-2** All 15 CI gates green (run 42633655325: every one passed; `test_enumeration` prints the live
+- ✅ **PF-2** All 17 CI gate scripts green (run 43594048091 for the two newest, `consume_contention` and its self-test, with the other 15 passing in the same run; `test_enumeration` prints the live
       count on each run — re-read the run after any later push): `config_drift`, `contract_drift`, `migration_lint`,
       `config_consumption`, `config_consumption_selftest`, `no_secret_leak`, `drain_grace`,
       `test_enumeration`, `test_enumeration_selftest`, `dsn_scrub_wiring`, `postgres_durability`,
-      `secret_ownership`, `go_suite_selftest`, `image_pins`, `image_pins_selftest` (re-derived from
-      `tests/harness/checks/` on 2026-11-08; this line said 9 while 15 are wired). (The `_selftest` gates are paired controls:
+      `secret_ownership`, `go_suite_selftest`, `image_pins`, `image_pins_selftest`, `consume_contention`, `consume_contention_selftest` (re-derived from
+      `tests/harness/checks/` on 2026-11-14; this line said 9 while 15 were wired, and 15 before the last two were added). (The `_selftest` gates are paired controls:
       each deliberately breaks the gate it names and fails if that gate stays green, so a gate cannot
       quietly stop checking anything.)
 - ⏳ **PF-3** The deployment's SIGTERM grace clears `shutdown_drain_timeout_sec` — `stop_grace_period` if

@@ -4,7 +4,7 @@ Numbered, append-only. A decision that is superseded gets a **new** ADR and the 
 ledger that precedes an ADR is [`../open-decisions.md`](../open-decisions.md) (`CLAUDE.md` Rule 2). Module 3 (`coldmail-send-byo`) was forked from this module at
 ADR-0012 and carries 0000–0012 as provenance; its own numbering starts at 0013.
 
-(Until 2026-11-09 these files lived in `Docs/history/decisions/` under bare names `NNNN-….md`; they were moved here and prefixed `ADR-` so all three module
+(Until 2026-11-13 these files lived in `Docs/history/decisions/` under bare names `NNNN-….md`; they were moved here and prefixed `ADR-` so all three module
 repositories use the same layout and file naming. The numbers, titles and text are unchanged. See [`../history/MOVED-DOCS.md`](../history/MOVED-DOCS.md).)
 
 | ADR | Decision |

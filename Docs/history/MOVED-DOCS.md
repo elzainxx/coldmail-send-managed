@@ -5,7 +5,7 @@ citations of paths that have since moved. This page is the map from an old path 
 lives now. If a path cited in a frozen document does not resolve, look it up here (or, for anything
 else, prepend `history/`).
 
-Changes are listed once, on **2026-11-09** (documentation restructure; the same structure is used by
+Changes are listed once, on **2026-11-13** (documentation restructure; the same structure is used by
 all three module repositories).
 
 ## Renamed or moved, content unchanged

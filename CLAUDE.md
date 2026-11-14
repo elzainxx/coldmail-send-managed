@@ -17,7 +17,7 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
   row in `send_managed.config` with a documented `default_value` and a `value_type` hint.
   Values are JSONB-wrapped `{"v": ...}`. There are NO hardcoded tuning constants in
   Go, Node, or SQL. A literal that governs runtime behavior is a bug.
-- `default_value` is never mutated. Phase 9 §4 is the authoritative 50-key reference. (2026-11-09: the
+- `default_value` is never mutated. Phase 9 §4 is the authoritative 50-key reference. (2026-11-13: the
   living reference is now `Docs/config-reference.md`, currently 57 keys — the `config_drift` gate, not a
   count written in prose, is what keeps it exact.)
 - New tunable => new seeded config key in a migration + an entry in the Phase 9 §4

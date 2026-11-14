@@ -4,7 +4,7 @@
 and where each guarantee is enforced. It is the "how is this built" document. It deliberately does
 **not** restate config keys (`config-reference.md`) or endpoint shapes (`api-contract.md`), and it
 no longer carries the per-phase build diary — that moved to `history/phase-build-record.md`, which
-is provenance rather than documentation. (Until 2026-11-09 this file was
+is provenance rather than documentation. (Until 2026-11-13 this file was
 `architecture-overview.md`, and the advisory-lock registry below was its own page,
 `advisory-locks.md`.)
 
@@ -155,7 +155,7 @@ reserved namespace that guarantees no collision on the shared instance.
 gates found what). [`open-decisions.md`](./open-decisions.md) is the living flag-don't-fix ledger (every
 ruling in force; zero open), [`history/open-decisions.md`](./history/open-decisions.md) is its frozen
 phase-0–10 predecessor, [`adr/`](./adr/) holds the ADRs, and `history/` the locked phase specs (12 files
-for 11 phases — `history/README.md` says why; documents merged into the living set on 2026-11-09 are under
+for 11 phases — `history/README.md` says why; documents merged into the living set on 2026-11-13 are under
 `history/merged-2026-11/`, mapped in `history/MOVED-DOCS.md`).
 
 ## Build status and the two ceilings

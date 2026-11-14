@@ -5,7 +5,7 @@
 > same file name one directory down: that one is provenance and is never edited; this one records every
 > ruling in force **since the fork** and is where a new decision is filed.
 
-**Status (2026-11-09): ZERO OPEN.** Every decision raised in this module is ruled and closed — the
+**Status (2026-11-13): ZERO OPEN.** Every decision raised in this module is ruled and closed — the
 phase-0–10 ledger ended empty on 2026-08-07 (R2-5, below), and every ruling made since is a row here with
 its evidence. Nothing is deferred *in this file*: work that was deliberately postponed lives in
 [`future-work.md`](./future-work.md), and the steps only the owner can take in the real world live in

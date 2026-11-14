@@ -68,7 +68,9 @@ func strPtr(s string) *string { return &s }
 // pg_stat_activity), the other seven released against it and all required to be refused while capacity
 // visibly remains. The statistical proof that stood here before (">1 worker succeeded", "the sampler saw
 // 2 backends active") was decided by scheduling and failed once on a runner in module 3; the volume
-// phase below now asserts only invariants and LOGS the overlap it observed.
+// phase below now asserts only invariants and LOGS the overlap it observed. The OTHER way a peer
+// is refused — the MVCC re-check, for a peer whose snapshot predates the holder's commit — is forced by
+// its own test, TestAccountConsume_StaleSnapshotPeerIsRefused (consume_contention_test.go, ADR-0015).
 //
 // FIXTURE SHAPE (Phase 7 Chunk 6 fix). Two earlier flakes — "only 1 worker ever succeeded" in
 // isolation and "consumes < 50" under full-suite connection pressure — were both the FIXTURE, not

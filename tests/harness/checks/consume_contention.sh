@@ -1,39 +1,55 @@
 #!/usr/bin/env bash
-# consume_contention — BLOCKING gate (FW-M3-22): the daily-limit ceiling is defended under FORCED contention, not hoped-for contention.
+# consume_contention — BLOCKING gate (FW-M3-22, ADR-0015): the daily-limit ceiling is defended under FORCED contention, on BOTH paths a peer can be refused by,
+# not hoped-for contention.
 #
-#   consume_contention.sh                  runs the REAL code once. TestAccountConsume_NeverExceedsDailyLimit must pass AND must have
-#                                          logged its FORCED CONTENTION line — a green that never forced the interleave is not a green.
-#   consume_contention.sh --repeat N       the same test N times (go test -count=N): N passes, zero failures, N evidence lines. This is what the
+#   consume_contention.sh                  runs the REAL code once. Both tests must pass AND each must have logged its evidence line — a green that never forced
+#                                          the interleave is not a green:
+#                                            TestAccountConsume_NeverExceedsDailyLimit   "FORCED CONTENTION: 1 holder parked ..."   (peers refused by SKIP LOCKED)
+#                                            TestAccountConsume_StaleSnapshotPeerIsRefused               "MVCC RE-CHECK FORCED: ..."                (peer refused by the re-check)
+#   consume_contention.sh --repeat N       both tests N times (go test -count=N): N passes each, zero failures, N evidence lines each. This is what the
 #                                          consume-contention-repeat workflow runs with N=50; a flake would show here as a failure count.
-#   consume_contention.sh --mutant NAME    the PAIRED CONTROL, one mutant of the production code (or of the test's own gate) that the test MUST turn red,
+#   consume_contention.sh --mutant NAME    the PAIRED CONTROL, one mutant of the production code (or of the test's own gate) that its TARGET test MUST turn red,
 #                                          for the RIGHT reason. NAME is one of:
-#                                            noskip     FOR UPDATE SKIP LOCKED -> FOR UPDATE: a peer waits on the locked row instead of being refused
-#                                            mutex      the consume is serialised behind one Go mutex: no two consumes can ever overlap
-#                                            noceiling  the daily-limit and paused predicates are removed: a consume past the limit is possible
-#                                            nogate     the gate trigger can never fire: the interleave is not forced (the test's own vacuity guard)
-#                                          consume_contention_selftest.sh runs the real code and every mutant.
+#                                            noskip      (DailyLimit)  FOR UPDATE SKIP LOCKED -> FOR UPDATE: a peer waits on the locked row instead of being refused
+#                                            mutex       (DailyLimit)  the consume is serialised behind one Go mutex: no two consumes can ever overlap
+#                                            noceiling   (DailyLimit)  the daily-limit and paused predicates are removed: a consume past the limit is possible
+#                                            nogate      (DailyLimit)  the gate trigger can never fire: the interleave is not forced (the test's own vacuity guard)
+#                                            norecheck   (StaleSnapshot)    the row lock is removed, and with it the re-check: only the CHECK constraint stands between the peer and a double booking
+#                                            nopolicy    (StaleSnapshot)    the MVCC gate policy can never call its function: the peer never parks, the interleave is not forced
+#                                          consume_contention_selftest.sh runs every mutant.
 #
-# WHY IT EXISTS. The test used to *hope* its eight workers contended and then assert that two of them had succeeded; under SKIP LOCKED one worker can take
-# every slot before a peer is scheduled, and it did (run 43445719147, "only 1 worker(s) ever succeeded", on a commit with no executable change). The test now
-# FORCES the contention (consume_contention_test.go: a consume parked on a test-held advisory lock while it holds the last slot, observed in pg_stat_activity,
-# with seven peers that must all be refused). This gate is what keeps that true on every run: it runs the test against the real code, and against mutants
-# that remove exactly the properties the test claims to prove.
+# WHY IT EXISTS. The first test used to *hope* its eight workers contended and then assert that two of them had succeeded; under SKIP LOCKED one worker can take
+# every slot before a peer is scheduled, and it did (run 43445719147, "only 1 worker(s) ever succeeded", on a commit with no executable change). It now FORCES the
+# contention (consume_contention_test.go: a consume parked on a test-held advisory lock while it holds the last slot, observed in pg_stat_activity, with seven peers
+# that must all be refused). The second test forces the OTHER refusal path, the MVCC re-check (a peer whose snapshot predates the holder's commit), with a test-only
+# row-level-security policy that parks only that peer between its snapshot and its row lock; the production SQL is untouched. This gate keeps both true on every run:
+# it runs the tests against the real code, and against mutants that remove exactly the properties they claim to prove.
 #
 # Needs: Go, the compose Postgres up (dev.sh reset or `compose up -d --wait postgres`), tools/send-managed-migrate buildable.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
+T1=TestAccountConsume_NeverExceedsDailyLimit
+T2=TestAccountConsume_StaleSnapshotPeerIsRefused
 MODE=real; MUTANT=""; COUNT=1
 while [ $# -gt 0 ]; do
   case "$1" in
-    --mutant) MODE=mutant; MUTANT="${2:?--mutant needs a name: noskip|mutex|noceiling|nogate}"; shift 2;;
+    --mutant) MODE=mutant; MUTANT="${2:?--mutant needs a name: noskip|mutex|noceiling|nogate|norecheck|nopolicy}"; shift 2;;
     --repeat) COUNT="${2:?--repeat needs a count}"; shift 2;;
     *) echo "consume_contention: unknown argument '$1'" >&2; exit 2;;
   esac
 done
-case "$MUTANT" in ""|noskip|mutex|noceiling|nogate) ;; *) echo "consume_contention: unknown mutant '$MUTANT'" >&2; exit 2;; esac
+case "$MUTANT" in ""|noskip|mutex|noceiling|nogate|norecheck|nopolicy) ;; *) echo "consume_contention: unknown mutant '$MUTANT'" >&2; exit 2;; esac
 LABEL="$MODE${MUTANT:+:$MUTANT}"
 fail() { echo "consume_contention ($LABEL) FAIL: $*" >&2; exit 1; }
+
+# Which test a mutant is aimed at: only that test runs, so a mutant of one path cannot be "caught" by the other test failing first.
+TARGET=""
+case "$MUTANT" in
+  noskip|mutex|noceiling|nogate) TARGET="$T1";;
+  norecheck|nopolicy)            TARGET="$T2";;
+esac
+if [ "$MODE" = real ]; then RUN="^($T1|$T2)\$"; else RUN="^$TARGET\$"; fi
 
 DC="${COMPOSE_INVOCATION:-$(bash scripts/dev.sh compose)}"
 SUPER="${POSTGRES_SUPERPASS:-devsuperpass}"
@@ -80,37 +96,49 @@ case "$MUTANT" in
   nogate)
     sed -i "s|WHEN (OLD.id = '%s'::uuid)|WHEN (OLD.id = '%s'::uuid AND false /*MUTANT-nogate*/)|" "$D/consume_contention_test.go"
     landed 'MUTANT-nogate' "$D/consume_contention_test.go";;
+  norecheck)
+    # No row lock => no LockRows => no re-check of the predicate against the committed version. The UPDATE that follows has no guard of its own, so only the
+    # accounts_daily_sent_check CONSTRAINT is left between a stale-snapshot peer and a double booking.
+    sed -i 's/^    FOR UPDATE SKIP LOCKED$/    -- MUTANT-norecheck: no row lock, so no re-check/' "$D/eligibility.go"
+    landed 'MUTANT-norecheck: no row lock, so no re-check' "$D/eligibility.go";;
+  nopolicy)
+    sed -i 's|USING (public.zz_mvcc_gate(id, daily_sent_count, daily_limit))|USING (true OR public.zz_mvcc_gate(id, daily_sent_count, daily_limit)) /*MUTANT-nopolicy*/|' "$D/consume_contention_test.go"
+    landed 'MUTANT-nopolicy' "$D/consume_contention_test.go";;
 esac
 
-RUN='^TestAccountConsume_NeverExceedsDailyLimit$'
 rc=0
 out="$(cd "$W/control" && GOTOOLCHAIN=local go test -count="$COUNT" -run "$RUN" -v -timeout 900s ./internal/dispatch 2>&1)" || rc=$?
 
 # Verdicts read $out through here-strings, never `echo "$out" | grep -q` (an early-exit pipe under pipefail reports "no match" for a real match).
-passed="$(grep -c -- "--- PASS: TestAccountConsume_NeverExceedsDailyLimit" <<<"$out" || true)"
-failed="$(grep -c -- "--- FAIL: TestAccountConsume_NeverExceedsDailyLimit" <<<"$out" || true)"
-skipped="$(grep -c -- "--- SKIP: TestAccountConsume_NeverExceedsDailyLimit" <<<"$out" || true)"
-forced="$(grep -c "FORCED CONTENTION: 1 holder parked" <<<"$out" || true)"
-echo "consume_contention ($LABEL): count=$COUNT passed=$passed failed=$failed skipped=$skipped forced_evidence=$forced rc=$rc"
-grep -E "_test.go:[0-9]+:|FORCED CONTENTION|^--- (FAIL|SKIP)" <<<"$out" | cut -c1-260 | head -12 || true
+n() { grep -c -- "$1" <<<"$out" || true; }
+p1="$(n "--- PASS: $T1")"; f1="$(n "--- FAIL: $T1")"; s1="$(n "--- SKIP: $T1")"
+p2="$(n "--- PASS: $T2")"; f2="$(n "--- FAIL: $T2")"; s2="$(n "--- SKIP: $T2")"
+ev1="$(n "FORCED CONTENTION: 1 holder parked")"
+ev2="$(n "MVCC RE-CHECK FORCED: peer was shown")"
+echo "consume_contention ($LABEL): count=$COUNT | $T1 passed=$p1 failed=$f1 skipped=$s1 evidence=$ev1 | $T2 passed=$p2 failed=$f2 skipped=$s2 evidence=$ev2 | rc=$rc"
+grep -E "_test.go:[0-9]+:|FORCED CONTENTION|MVCC|^--- (FAIL|SKIP)" <<<"$out" | cut -c1-300 | head -14 || true
 
 if [ "$MODE" = real ]; then
-  [ "$rc" -eq 0 ]               || { echo "$out" | tail -30 >&2; fail "the test failed (rc=$rc)"; }
-  [ "$failed" -eq 0 ]           || fail "$failed run(s) failed"
-  [ "$skipped" -eq 0 ]          || fail "$skipped run(s) were skipped — a skip is a shortfall, not a pass (is TEST_ADMIN_DATABASE_URL / the template set?)"
-  [ "$passed" -eq "$COUNT" ]    || fail "only $passed of $COUNT runs passed"
-  [ "$forced" -eq "$COUNT" ]    || fail "only $forced of $COUNT runs logged the FORCED CONTENTION evidence line — a pass that did not force the interleave proves nothing"
-  echo "consume_contention OK: $COUNT of $COUNT run(s) of TestAccountConsume_NeverExceedsDailyLimit passed, each with the interleave forced (holder parked, peers refused with capacity remaining)"
+  [ "$rc" -eq 0 ]            || { echo "$out" | tail -30 >&2; fail "the tests failed (rc=$rc)"; }
+  [ $((f1 + f2)) -eq 0 ]     || fail "$((f1 + f2)) run(s) failed"
+  [ $((s1 + s2)) -eq 0 ]     || fail "$((s1 + s2)) run(s) were skipped — a skip is a shortfall, not a pass (is TEST_ADMIN_DATABASE_URL / the template set?)"
+  [ "$p1" -eq "$COUNT" ]     || fail "only $p1 of $COUNT runs of $T1 passed"
+  [ "$p2" -eq "$COUNT" ]     || fail "only $p2 of $COUNT runs of $T2 passed"
+  [ "$ev1" -eq "$COUNT" ]    || fail "only $ev1 of $COUNT runs of $T1 logged the FORCED CONTENTION evidence line — a pass that did not force the interleave proves nothing"
+  [ "$ev2" -eq "$COUNT" ]    || fail "only $ev2 of $COUNT runs of $T2 logged the MVCC RE-CHECK FORCED evidence line — a pass that did not force the interleave proves nothing"
+  echo "consume_contention OK: $COUNT of $COUNT run(s) of each test passed, each with its interleave forced (last-slot holder parked and peers refused with capacity remaining; stale-snapshot peer parked, holder committed, peer refused by the re-check)"
 else
   case "$MUTANT" in
     noskip|mutex) sig='FORCED CONTENTION BROKEN';;
     noceiling)    sig='OVER-CONSUMPTION|errored once capacity was gone|accounts_daily_sent_check FIRED';;
     nogate)       sig='forced interleave did not engage';;
+    norecheck)    sig='MVCC RE-CHECK PATH FAILED';;
+    nopolicy)     sig='MVCC forced interleave did not engage';;
   esac
-  [ "$rc" -ne 0 ]               || fail "the '$MUTANT' mutant PASSED: this test cannot detect the defect it exists for"
-  grep -q -- "--- FAIL: TestAccountConsume_NeverExceedsDailyLimit" <<<"$out" \
-    || fail "the '$MUTANT' mutant failed, but not in the test under control (build error? $(grep -m1 -E 'build failed|cannot|undefined|syntax error' <<<"$out" || true)) — that proves nothing"
+  [ "$rc" -ne 0 ]            || fail "the '$MUTANT' mutant PASSED: $TARGET cannot detect the defect it exists for"
+  grep -q -- "--- FAIL: $TARGET" <<<"$out" \
+    || fail "the '$MUTANT' mutant failed, but not in the test under control, $TARGET (build error? $(grep -m1 -E 'build failed|cannot|undefined|syntax error' <<<"$out" || true)) — that proves nothing"
   grep -qE -- "$sig" <<<"$out" \
     || fail "the '$MUTANT' mutant went red, but without its signature /$sig/ — it failed for some other reason, which proves nothing about this defect"
-  echo "consume_contention --mutant $MUTANT OK: the test goes RED with the signature /$sig/"
+  echo "consume_contention --mutant $MUTANT OK: $TARGET goes RED with the signature /$sig/"
 fi

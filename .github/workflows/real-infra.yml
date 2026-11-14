@@ -206,9 +206,9 @@ jobs:
         if: always()
         run: bash tests/harness/checks/consume_contention.sh
 
-      # Its PAIRED CONTROLS: four mutants (SKIP LOCKED removed, consume serialised, ceiling removed, gate disarmed) must each
-      # turn the same test red with their own signature.
-      - name: Consume contention SELF-TEST — four mutants each go RED (BLOCKING)
+      # Its PAIRED CONTROLS: six mutants (SKIP LOCKED removed, consume serialised, ceiling removed, gate disarmed — and, for the MVCC re-check test, row lock removed and its gate disarmed) must each
+      # turn the test it targets red with its own signature.
+      - name: Consume contention SELF-TEST — six mutants each go RED (BLOCKING)
         if: always()
         run: bash tests/harness/checks/consume_contention_selftest.sh
 

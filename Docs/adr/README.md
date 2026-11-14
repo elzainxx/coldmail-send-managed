@@ -24,5 +24,6 @@ repositories use the same layout and file naming. The numbers, titles and text a
 | [0012](ADR-0012-job-events-set-null-fks-collide-with-append-only-trigger.md) | `job_events`' two `ON DELETE SET NULL` FKs collide with its append-only trigger |
 | [0013](ADR-0013-dispatch-kill-switch-becomes-a-graduated-rung-ladder.md) | the dispatch kill-switch becomes a graduated rung ladder |
 | [0014](ADR-0014-every-autonomous-mutator-gets-a-shadow-ladder.md) | every autonomous mutator gets an off / shadow / enforce ladder seeded at `shadow` |
+| [0015](ADR-0015-the-mvcc-recheck-path-is-forced-by-a-test-only-rls-gate.md) | the consume's MVCC re-check path is forced by a test-only row-level-security gate, not left to volume |
 
-**Next number: 0015.** (Module 2's file names have no leading zeros beyond four digits; keep `ADR-NNNN-kebab-title.md`.)
+**Next number: 0016.** (Module 2's file names have no leading zeros beyond four digits; keep `ADR-NNNN-kebab-title.md`.)

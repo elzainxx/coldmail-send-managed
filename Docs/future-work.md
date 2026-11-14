@@ -156,8 +156,16 @@ mid-query. Under `FOR UPDATE SKIP LOCKED` nothing makes the lock fair, so one wo
 required to be refused while `daily_sent_count` is still `limit-1` — and the volume phase keeps every invariant but only *logs* the overlap. Proof on the GitHub runner: the gate
 `consume_contention.sh` and its four mutants (`noskip`, `mutex`, `noceiling`, `nogate`) each go red with their own signature
 ([43594048091](https://github.com/elzainxx/coldmail-send-managed/actions/runs/43594048091), harness 62/0), and the `consume-contention-repeat` workflow ran the test 50 times: 50 passed,
-0 failed ([43594048182](https://github.com/elzainxx/coldmail-send-managed/actions/runs/43594048182)). The MVCC re-check path (a peer whose snapshot predates the holder's commit) cannot be
-driven from outside the statement and is still exercised only by volume.
+0 failed ([43594048182](https://github.com/elzainxx/coldmail-send-managed/actions/runs/43594048182)).
+
+**The MVCC re-check path — recorded here on 2026-11-14 as exercised only by volume — was forced the same day (ADR-0015, ported from module 3's ADR-0019).** It is the path where a peer's statement snapshot
+predates the holder's commit but its row lock follows it: the peer saw capacity, and only Postgres's re-check of the predicate against the committed row version refuses it. From inside the statement there is a
+point at which to hold it: `TestAccountConsume_StaleSnapshotPeerIsRefused` adds a test-only *restrictive row-level-security policy* whose qualifier calls a volatile gate function, which runs in the peer's scan
+(after its snapshot, before its row lock) and parks only the backend with `application_name = 'zz_mvcc_peer'`. The holder takes the last slot and commits; the released peer must be refused with no error, the count must
+stay at the limit, and the gate's log must show the peer was shown the row with capacity (`seen_count = limit-1`). **Production code is unchanged.** Two more mutants prove the test can fail (`norecheck`: the row lock and
+with it the re-check removed; `nopolicy`: the gate disarmed). The gate now runs six mutants; the `consume-contention-repeat` workflow ran **both tests 50 times each: 50 passed, 0 failed, 100 evidence lines**
+([43633874895](https://github.com/elzainxx/coldmail-send-managed/actions/runs/43633874895)); `real-infra` with the six-mutant self-test: [43633826951](https://github.com/elzainxx/coldmail-send-managed/actions/runs/43633826951).
+What the test does not assert: that the gate was called again with the committed version (the planner may order a user qualifier first) — the capacity sighting and the refusal are asserted, the rest is logged.
 
 ---
 

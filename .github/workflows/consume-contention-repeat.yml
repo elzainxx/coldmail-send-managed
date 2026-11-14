@@ -8,7 +8,7 @@
 #
 # Run it by hand:  gh workflow run consume-contention-repeat.yml -R elzainxx/coldmail-send-managed -f count=50
 #
-# The single-run gate and its four mutants (the paired controls that prove the test goes red without the property) are in
+# The single-run gate and its six mutants (the paired controls that prove each test goes red without the property) are in
 # real-infra.yml: tests/harness/checks/consume_contention.sh and consume_contention_selftest.sh.
 name: consume-contention-repeat
 on:

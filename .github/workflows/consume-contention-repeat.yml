@@ -1,0 +1,43 @@
+# FW-M3-22 — the REPEAT proof for the daily-limit ceiling test.
+#
+# TestAccountConsume_NeverExceedsDailyLimit guards the double-booking ceiling and failed once (run 43445719147)
+# for a reason that had nothing to do with the code under test: its proof that the race was real was decided by scheduling.
+# It now FORCES the contention (consume_contention_test.go). "It no longer flakes" is a claim about many runs, so this workflow
+# runs the test N times (default 50) against the real code on a runner and requires N passes, zero failures, and N lines of
+# forced-contention evidence. One failure in 50 is a failed workflow.
+#
+# Run it by hand:  gh workflow run consume-contention-repeat.yml -R elzainxx/coldmail-send-managed -f count=50
+#
+# The single-run gate and its four mutants (the paired controls that prove the test goes red without the property) are in
+# real-infra.yml: tests/harness/checks/consume_contention.sh and consume_contention_selftest.sh.
+name: consume-contention-repeat
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "How many times to run TestAccountConsume_NeverExceedsDailyLimit"
+        required: false
+        default: "50"
+  push:
+    branches: ["contention-fix*"]
+
+jobs:
+  repeat:
+    runs-on: ubuntu-latest
+    env:
+      DEV_RAM_PG: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Generate dev secrets (writes .env, which the compose file reads)
+        run: bash scripts/dev.sh certs
+
+      - name: Bring up Postgres only (the test needs a database, not the stack)
+        run: $(bash scripts/dev.sh compose) up -d --wait postgres
+
+      - name: Run the test N times — zero failures, N evidence lines
+        run: bash tests/harness/checks/consume_contention.sh --repeat "${{ inputs.count || '50' }}"

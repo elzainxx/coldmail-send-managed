@@ -62,11 +62,13 @@ func strPtr(s string) *string { return &s }
 // attempt ever surfaces accounts_daily_sent_check's SQLSTATE 23514 — the CHECK is the last-resort
 // invariant and must NEVER fire in normal operation (a fire would mean SKIP LOCKED + the MVCC
 // re-check failed to absorb the contention, a genuine finding, not something to paper over —
-// CLAUDE.md closeout instruction, 2026-07-24). Anti-vacuity: asserts observed demand > capacity,
-// that concurrency was genuinely exercised (more than one worker succeeded), AND — the strongest
-// check — samples pg_stat_activity DURING the race and asserts at least 2 workers were observed
-// simultaneously inside an active query against this account's row, proving overlap in wall-clock
-// time, not just "multiple workers eventually ran."
+// CLAUDE.md closeout instruction, 2026-07-24). Anti-vacuity: asserts observed demand > capacity, and
+// — since FW-M3-22 (module 3) — PROVES the race is real by FORCING it (PHASE 1, consume_contention_test.go):
+// one slot left, one consume parked on a test-held gate while holding it (observed via a scoped
+// pg_stat_activity), the other seven released against it and all required to be refused while capacity
+// visibly remains. The statistical proof that stood here before (">1 worker succeeded", "the sampler saw
+// 2 backends active") was decided by scheduling and failed once on a runner in module 3; the volume
+// phase below now asserts only invariants and LOGS the overlap it observed.
 //
 // FIXTURE SHAPE (Phase 7 Chunk 6 fix). Two earlier flakes — "only 1 worker ever succeeded" in
 // isolation and "consumes < 50" under full-suite connection pressure — were both the FIXTURE, not
@@ -117,6 +119,24 @@ func TestAccountConsume_NeverExceedsDailyLimit(t *testing.T) {
 		dispatchers[w] = NewDispatcher(p, e.dec, e.px)
 	}
 
+	// PHASE 1 — FORCED CONTENTION (FW-M3-22, ported from module 3; consume_contention_test.go). One slot left, one
+	// consume proven parked holding it, the other seven released against it and all required to be refused while
+	// capacity visibly remains. Contention is built, not hoped for: nothing in this phase passes or fails by scheduling.
+	// Then the account is put back to its starting state for the volume phase.
+	consumeFns := make([]func() (bool, error), workers)
+	for w := 0; w < workers; w++ {
+		d := dispatchers[w]
+		consumeFns[w] = func() (bool, error) {
+			_, ok, err := d.accountConsume(context.Background(), pool, defaultAccountOrderBy, nil, "UTC", 0, 900)
+			return ok, err
+		}
+	}
+	forceLastSlotContention(t, e, acct, limit, consumeFns)
+	e.setAccountDailyState(t, acct, limit, 0, todayUTC(), false, nil)
+
+	// PHASE 2 — VOLUME. Eight workers race fifty slots. Every INVARIANT is asserted below (exactly 50, none after the
+	// limit, no SQLSTATE 23514); HOW MUCH they overlapped is logged, not judged, because that is what scheduling decides.
+	//
 	// Concurrency-overlap sampler: while the 8 workers race, poll pg_stat_activity (via the ADMIN
 	// connection, a 9th connection distinct from the 8 workers') for how many of THIS test's own
 	// backends are simultaneously mid-query. This is the spec's own §9 T1 anti-vacuity requirement
@@ -255,20 +275,13 @@ func TestAccountConsume_NeverExceedsDailyLimit(t *testing.T) {
 	if got != limit {
 		t.Fatalf("daily_sent_count=%d, want EXACTLY %d — the double-booking invariant was violated", got, limit)
 	}
-	// Anti-vacuity #1: genuine concurrency means more than one worker landed a success (a
-	// serialized/broken-locking implementation could still pass the count check by accident if,
-	// say, only one worker ever ran — this rules that out).
-	if len(successByWorker) < 2 {
-		t.Fatalf("only %d worker(s) ever succeeded — concurrency was not genuinely exercised", len(successByWorker))
-	}
-	// Anti-vacuity #2 (the spec's own §9 T1 requirement): prove overlap in WALL-CLOCK time via a
-	// live pg_stat_activity sample, not just an aggregate success count that could theoretically
-	// arise from 8 workers that happened never to overlap.
+	// FW-M3-22 (ported): the two assertions that stood here — "more than one worker landed a success" and "the
+	// pg_stat_activity sampler saw two backends mid-query" — were the test's proof that the race was real, and both were
+	// decided by scheduling: under SKIP LOCKED one worker can take every slot before a peer is scheduled, and in module 3
+	// it did (run 43445719147, a commit with no executable change). They are now OBSERVATIONS. The proof that contention
+	// happens is PHASE 1 above, which builds it instead of sampling for it; this phase keeps what scheduling cannot change.
 	observed := atomic.LoadInt64(&maxConcurrentActive)
-	t.Logf("pg_stat_activity sampler observed max %d workers simultaneously active mid-query", observed)
-	if observed < 2 {
-		t.Fatalf("pg_stat_activity never observed >=2 workers simultaneously active (max seen: %d) — the sampler either missed the race window or the workers ran serially, not genuinely concurrently", observed)
-	}
+	t.Logf("volume phase overlap (observed, not asserted): %d worker(s) landed a success; the pg_stat_activity sampler saw at most %d consume statement(s) active at once", len(successByWorker), observed)
 	// CHUNK 1(b) explicit finding statement: report, do not paper over, whether the CHECK fired.
 	if checkViolations > 0 {
 		t.Fatalf("FINDING: accounts_daily_sent_check fired %d time(s) during a NORMAL healthy run — "+

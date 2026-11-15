@@ -246,6 +246,22 @@ file and watch it go red.
 
 ---
 
+## 7b. PARKED — deferred choices nobody has made
+
+Moved here from the parent repository's `OWNER-ACTIONS.md` §7 on 2026-11-15. These are **not open decisions** (the ledger in [`open-decisions.md`](./open-decisions.md) is at zero) and **none blocks go-live**; the built behaviour is safe. They are parked because nobody has made the choice and **no recommendation is recorded**. Taking one up means raising an Open Decision (and an ADR where it resolves a design question) — CLAUDE.md Rule 2 — not just a commit. The ids `M2-FW-1`…`M2-FW-7` are defined **here**, for the first time; the rows of §2, §4, §4a and §5 that each one relates to are named in the last column.
+
+| id | the choice (text as moved) | related rows of this file |
+|---|---|---|
+| **M2-FW-1** | How often, and who reviews, a bump of the digest-pinned base images (every image is pinned, so nothing patches a base until someone bumps it). | §5 |
+| **M2-FW-2** | Adopt M3's RESERVED-marker *expiry* rule for `config_consumption`, and decide the two live RESERVED keys `retry_count_4xx` and `variation_zero_width_rate_pct` (M3's precedent: drop the key). | §5 |
+| **M2-FW-3** | Close the `smtp_host` credential-redirect path: require `smtp_secret` re-entry when `smtp_host` changes, and/or an allowlist of SMTP hosts. Changes a documented `PATCH`. | §4a · `security-posture.md` §3.11 |
+| **M2-FW-4** | Reject private-range `smtp_host` at write time vs. gating the worker's self-signed affordance behind a dev flag; and restrict `alert_webhook_url`'s destination (blocklist vs allowlist). | §4a · `security-posture.md` §3.13–3.14 |
+| **M2-FW-5** | May deleting a platform user cascade to `send_managed.pools` (one-call tenant erasure)? | §4 |
+| **M2-FW-6** | Dedicated → dedicated pool fallback: whose accounts may carry whose mail, and the billing consequence. | §2 |
+| **M2-FW-7** | Per-pool (or per-account) scope for the content-variation toggles: resolution order and storage. | §2 |
+
+---
+
 ## 8. Related
 
 | Doc | For |

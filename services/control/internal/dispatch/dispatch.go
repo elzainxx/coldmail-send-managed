@@ -225,6 +225,7 @@ WITH claimed AS (
     SELECT id FROM send_managed.jobs
     WHERE state = 'queued' AND next_attempt_at <= NOW()
       AND provider_message_id IS NULL
+      AND cancel_requested_at IS NULL
     ORDER BY next_attempt_at ASC, created_at ASC
     FOR UPDATE SKIP LOCKED
     LIMIT 1
@@ -555,7 +556,17 @@ func (d *Dispatcher) requeue(ctx context.Context, jobID, reason string) {
 		// counter as the outcome handler, so they must saturate too — an unconditional +1 here would
 		// violate jobs_attempt_count_check (23514) once a job that has already hit the cap requeues
 		// again (e.g. its only account was auto-quarantined). Job failure is decoupled from
-		// attempt_count; only pool exhaustion fails a job (Chunk 5).
+		// attempt_count: it is decided by pool exhaustion (exhaustion.go) and by the attempt cap, which
+		// counts failed SMTP attempts in its OWN columns (send_managed_0028, attempts_cap.go).
+		//
+		// THIS PATH DELIBERATELY DOES NOT COUNT TOWARD THE ATTEMPT CAP. Every requeue() reason —
+		// no_eligible_account, no_worker_available, push_failed, header_injection — is a requeue that did
+		// NOT reach SMTP: the message was never handed to a server, so there is no failure to count, and a
+		// job that is waiting for an account or a worker must stay `queued` however long it waits. That is
+		// why failed_attempt_count / first_failed_at are not touched below even though attempt_count is.
+		//
+		// If the job's campaign was cancelled while it was in flight (cancel_requested_at set), the cancel
+		// guard trigger (send_managed_0028) turns this requeue into `cancelled`.
 		_, err := tx.Exec(ctx,
 			`UPDATE send_managed.jobs
 			   SET state='queued',

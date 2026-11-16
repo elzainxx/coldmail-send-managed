@@ -22,6 +22,7 @@ const claimForUserQuery = `
 WITH claimed AS (
     SELECT id FROM send_managed.jobs
     WHERE state = 'queued' AND next_attempt_at <= NOW() AND user_id = $1
+      AND cancel_requested_at IS NULL
     ORDER BY next_attempt_at ASC, created_at ASC
     FOR UPDATE SKIP LOCKED
     LIMIT $2
@@ -263,7 +264,8 @@ func (d *Dispatcher) snapshotActiveUsers(ctx context.Context) ([]string, error) 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	rows, err := d.db.Query(ctx,
-		`SELECT DISTINCT user_id FROM send_managed.jobs WHERE state='queued' AND next_attempt_at <= NOW()`)
+		`SELECT DISTINCT user_id FROM send_managed.jobs
+		  WHERE state='queued' AND next_attempt_at <= NOW() AND cancel_requested_at IS NULL`)
 	if err != nil {
 		return nil, err
 	}

@@ -140,13 +140,18 @@ func (s *Server) jobStateByItem(ctx context.Context, jobItemID, userID string) (
 	return state, true
 }
 
-// reportRow is the clean per-job report shape (§6.3).
+// reportRow is the clean per-job report shape (§6.3). The last four fields are INPUTS to the published
+// `reason` / `error_class` (item_reason.go) and are never serialized as they stand.
 type reportRow struct {
 	jobID             string
 	state             string
 	providerMessageID *string
 	completedAt       *time.Time
 	attemptCount      int
+
+	lastErrorClass   *string
+	lastErrorMessage *string // read only to tell a dispatcher-side requeue from an SMTP failure; never serialized
+	terminalReason   *string
 }
 
 // readReport fetches the clean state for a job by job_id OR job_item_id, SCOPED to the calling
@@ -161,14 +166,18 @@ func (s *Server) readReport(ctx context.Context, jobID, jobItemID, userID string
 	)
 	if jobID != "" {
 		err = s.db.QueryRow(ctx,
-			`SELECT id, state::text, provider_message_id, completed_at, attempt_count
+			`SELECT id, state::text, provider_message_id, completed_at, attempt_count,
+			        last_error_class::text, last_error_message, terminal_reason
 			 FROM send_managed.jobs WHERE id = $1 AND user_id = $2`, jobID, userID).
-			Scan(&rr.jobID, &rr.state, &rr.providerMessageID, &rr.completedAt, &rr.attemptCount)
+			Scan(&rr.jobID, &rr.state, &rr.providerMessageID, &rr.completedAt, &rr.attemptCount,
+				&rr.lastErrorClass, &rr.lastErrorMessage, &rr.terminalReason)
 	} else {
 		err = s.db.QueryRow(ctx,
-			`SELECT id, state::text, provider_message_id, completed_at, attempt_count
+			`SELECT id, state::text, provider_message_id, completed_at, attempt_count,
+			        last_error_class::text, last_error_message, terminal_reason
 			 FROM send_managed.jobs WHERE job_item_id = $1 AND user_id = $2`, jobItemID, userID).
-			Scan(&rr.jobID, &rr.state, &rr.providerMessageID, &rr.completedAt, &rr.attemptCount)
+			Scan(&rr.jobID, &rr.state, &rr.providerMessageID, &rr.completedAt, &rr.attemptCount,
+				&rr.lastErrorClass, &rr.lastErrorMessage, &rr.terminalReason)
 	}
 	if err != nil {
 		if isNoRows(err) {

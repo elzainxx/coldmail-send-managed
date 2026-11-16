@@ -25,5 +25,6 @@ repositories use the same layout and file naming. The numbers, titles and text a
 | [0013](ADR-0013-dispatch-kill-switch-becomes-a-graduated-rung-ladder.md) | the dispatch kill-switch becomes a graduated rung ladder |
 | [0014](ADR-0014-every-autonomous-mutator-gets-a-shadow-ladder.md) | every autonomous mutator gets an off / shadow / enforce ladder seeded at `shadow` |
 | [0015](ADR-0015-the-mvcc-recheck-path-is-forced-by-a-test-only-rls-gate.md) | the consume's MVCC re-check path is forced by a test-only row-level-security gate, not left to volume |
+| [0016](ADR-0016-cancel-attempt-cap-item-reasons-and-the-keyset-cursor.md) | `POST /v1/cancel` (with a row-level cancel guard), the attempt cap, `reason`/`error_class` on every report item, and the keyset cursor fixes |
 
-**Next number: 0016.** (Module 2's file names have no leading zeros beyond four digits; keep `ADR-NNNN-kebab-title.md`.)
+**Next number: 0017.** (Module 2's file names have no leading zeros beyond four digits; keep `ADR-NNNN-kebab-title.md`.)

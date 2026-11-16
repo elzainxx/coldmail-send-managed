@@ -69,6 +69,10 @@ type accountEvent struct {
 	Reason    *string        `json:"reason"`
 	RequestID *string        `json:"request_id"`
 	CreatedAt string         `json:"created_at"`
+
+	// cursorTS: created_at at full microsecond precision, for the keyset cursor only (never serialized) —
+	// see account_store.go's accountResource.cursorTS.
+	cursorTS string `json:"-"`
 }
 
 // handleAccountEvents: GET /v1/admin/accounts/{id}/events (§7.4). Cursor-paginated audit trail
@@ -101,7 +105,8 @@ func (s *Server) handleAccountEvents(w http.ResponseWriter, r *http.Request) {
 	limitParam := "$" + strconv.Itoa(len(args))
 	query := `SELECT e.id, e.account_id, e.user_id, e.actor, e.action, e.from_flags, e.to_flags,
 	          e.reason, e.request_id,
-	          to_char(e.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')
+	          to_char(e.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+	          to_char(e.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
 	          FROM send_managed.account_events e WHERE ` + strings.Join(conds, " AND ") +
 		" ORDER BY e.created_at ASC, e.id ASC LIMIT " + limitParam
 
@@ -121,7 +126,7 @@ func (s *Server) handleAccountEvents(w http.ResponseWriter, r *http.Request) {
 			fromJSON, toJSON []byte
 		)
 		if err := rows.Scan(&ev.ID, &ev.AccountID, &ev.UserID, &ev.Actor, &ev.Action,
-			&fromJSON, &toJSON, &ev.Reason, &ev.RequestID, &ev.CreatedAt); err != nil {
+			&fromJSON, &toJSON, &ev.Reason, &ev.RequestID, &ev.CreatedAt, &ev.cursorTS); err != nil {
 			s.fail(w, r, newErr(codeInternalError, "events_scan_error: "+err.Error()))
 			return
 		}
@@ -134,11 +139,12 @@ func (s *Server) handleAccountEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Cursor from the LAST RETURNED item at FULL sort-key precision — see handleAccountList.
 	var nextCursor *string
 	if len(items) > limit {
 		last := items[limit-1]
 		items = items[:limit]
-		c := encodeCursor(last.CreatedAt, last.ID)
+		c := encodeCursor(last.cursorTS, last.ID)
 		nextCursor = &c
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor})

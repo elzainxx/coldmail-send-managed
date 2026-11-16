@@ -93,11 +93,12 @@ func (s *Server) handlePoolList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Cursor from the LAST RETURNED item at FULL sort-key precision — see handleAccountList.
 	var nextCursor *string
 	if len(items) > limit {
 		last := items[limit-1]
 		items = items[:limit]
-		c := encodeCursor(last.CreatedAt, last.ID)
+		c := encodeCursor(last.cursorTS, last.ID)
 		nextCursor = &c
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor})

@@ -134,6 +134,10 @@ func (e *testEnv) seedHealthJob(t *testing.T, targetState string) string {
 			setClause = `state='failed', completed_at=NOW(), lease_expires_at=NULL`
 		case "bounced":
 			setClause = `state='bounced', completed_at=NOW(), lease_expires_at=NULL`
+		case "cancelled":
+			// send_managed_0027/0028: the terminal state POST /v1/cancel writes. completed_at is REQUIRED on it
+			// by the widened jobs_completed_at_valid_check, so this seed also proves that constraint accepts it.
+			setClause = `state='cancelled', completed_at=NOW(), lease_expires_at=NULL`
 		}
 		if _, err := tx2.Exec(ctx, `UPDATE send_managed.jobs SET `+setClause+` WHERE id=$1`, jobID); err != nil {
 			t.Fatalf("update step %s: %v", st, err)
@@ -176,6 +180,8 @@ func TestHealth_ReportsTrueStateUnderKnownMix(t *testing.T) {
 	e.seedHealthJob(t, "sent")
 	e.seedHealthJob(t, "failed")
 	e.seedHealthJob(t, "bounced")
+	e.seedHealthJob(t, "cancelled")
+	e.seedHealthJob(t, "cancelled")
 
 	// --- Workers: one active (fresh heartbeat), one stale (old heartbeat), one disabled. ---
 	e.seedHealthWorker(t, "active", 5)
@@ -218,7 +224,13 @@ func TestHealth_ReportsTrueStateUnderKnownMix(t *testing.T) {
 	if !ok {
 		t.Fatalf("response missing queue object: %s", resp.raw)
 	}
-	for _, st := range []string{"queued", "sending", "sent", "failed", "bounced"} {
+	// "cancelled" is the seventh job_state (send_managed_0027): the queue block carries one field per state, so
+	// it must carry this one too — and the paired expectation is two seeded rows, so a field that is merely
+	// present-but-zero fails here.
+	if wantQueue["cancelled"] != 2 {
+		t.Fatalf("precondition: direct COUNT of cancelled jobs = %d, want the 2 seeded — the cancelled assertion below would be vacuous", wantQueue["cancelled"])
+	}
+	for _, st := range []string{"queued", "sending", "sent", "failed", "bounced", "cancelled"} {
 		got := intField(t, queue, st)
 		if got != wantQueue[st] {
 			t.Fatalf("queue.%s=%d, want %d (direct DB COUNT) — full queue block: %+v", st, got, wantQueue[st], queue)

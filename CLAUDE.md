@@ -18,7 +18,7 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
   Values are JSONB-wrapped `{"v": ...}`. There are NO hardcoded tuning constants in
   Go, Node, or SQL. A literal that governs runtime behavior is a bug.
 - `default_value` is never mutated. Phase 9 §4 is the authoritative 50-key reference. (2026-11-13: the
-  living reference is now `Docs/config-reference.md`, currently 57 keys — the `config_drift` gate, not a
+  living reference is now `Docs/config-reference.md`, currently 59 keys — the `config_drift` gate, not a
   count written in prose, is what keeps it exact.)
 - New tunable => new seeded config key in a migration + an entry in the Phase 9 §4
   reference in the same change. No key, no constant.
@@ -46,7 +46,8 @@ to require breaking one, STOP and file an Open Decision (Rule 2) — do not proc
   standing in for behavior.
 - This is absolute for: claim/consume (exactly-once job pickup), idempotency
   (no double-send under retry/replay), and the job state machine
-  (queued/assigned/sending/sent/failed/bounced transitions).
+  (queued/assigned/sending/sent/failed/bounced/cancelled transitions — `cancelled` added 2026-11-17,
+  send_managed_0027, ADR-0016).
 - The real-infra harness (`tests/harness/`) is the home for these; new behavior ships
   with a behavioral test in that harness. A test that cannot fail is not a test:
   every test asserts a concrete observed post-state, and guard tests carry a paired

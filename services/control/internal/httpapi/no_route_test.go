@@ -99,7 +99,7 @@ func TestRootMux_UnknownPathIsACodedEnvelopeNotPlainText(t *testing.T) {
 func TestRootMux_UnmountedSurfacePathAnswersTheEnvelopeToo(t *testing.T) {
 	ts := newRootTestServer(t, nil, nil) // both surfaces unmounted
 	for _, path := range []string{
-		"/v1/quote", "/v1/run", "/v1/report", "/v1/describe", // platform, unmounted
+		"/v1/quote", "/v1/run", "/v1/report", "/v1/describe", "/v1/cancel", // platform, unmounted
 		"/v1/admin/accounts", "/v1/admin/config", // admin, unmounted
 	} {
 		status, _, body := getRoot(t, ts, "GET", path)
@@ -175,7 +175,7 @@ func TestRootMux_CatchAllDoesNotShadowAMountedRoute(t *testing.T) {
 				path, status, adminHit, body)
 		}
 	}
-	for _, path := range []string{"/v1/quote", "/v1/run", "/v1/report", "/v1/describe"} {
+	for _, path := range []string{"/v1/quote", "/v1/run", "/v1/report", "/v1/describe", "/v1/cancel"} {
 		platformHit = false
 		if status, _, body := getRoot(t, ts, "GET", path); status != http.StatusTeapot || !platformHit {
 			t.Fatalf("GET %s: status=%d platformHit=%v — the catch-all swallowed a mounted platform route; body=%s",

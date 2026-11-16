@@ -255,7 +255,7 @@ For how to *interpret* these numbers, see [`operator-runbook.md`](./operator-run
 | `dispatch.ticks_per_min` | float | observed dispatch cadence |
 | `dispatch.sends_last_window` | int | sends completed inside `window_sec` |
 | `dispatch.send_rate_per_min` | float | derived from the two above |
-| `queue.{queued,assigned,sending,sent,failed,bounced}` | int | `COUNT(*) GROUP BY state` over `send_managed.jobs` — one field per `job_state` |
+| `queue.{queued,assigned,sending,sent,failed,bounced,cancelled}` | int | `COUNT(*) GROUP BY state` over `send_managed.jobs` — one field per `job_state` (`cancelled` added with `send_managed_0027`, additive) |
 | `queue.waiting_for_capacity` | int | queued jobs whose resolved pool chain has ZERO eligible accounts. **Not an error state** |
 | `workers.{active,stale,disabled}` | int | counts by `box_status` |
 | `workers.oldest_active_heartbeat_age_sec` | int, **omitted** when no active worker | staleness of the least-recently-heard-from active worker |
@@ -336,7 +336,8 @@ internal hostname (two-vocabulary rule). Additive-only: these routes never renam
 |---|---|---|
 | POST | `/v1/quote` | recipient count → cost (Phase 9 §1, finalized: `cost = recipient_count × unit_price_credits`, unit read LIVE from `send_managed.config`) — response adds the additive `unit_price_credits`/`tier` fields so the platform's preview/confirm-cost step can show the caller why the number is what it is; pure, side-effect-free, idempotent — reserves nothing and creates no job. **`recipient_count` rejections are distinguishable** (see the `details[]` note above): absent/`null` → `required`; present-but-negative → `out_of_range`; wrong JSON type → `malformed` naming the field. `0` is a VALID count (`cost: 0`), not a rejection. **`user_id` is OPTIONAL, ACCEPTED, AND IGNORED** (additive request field, audit finding **D4**/fix-plan item 5): this module's cost is `recipient_count × unit_price_credits` with no tenant term, so `user_id` cannot and must not change the answer — supplying it returns a **byte-identical** response to omitting it, which is pinned by a test rather than merely documented. It exists so ONE request body works against both senders: module 3's `quote` REQUIRES `user_id` (its answer is a per-user feasibility assessment), both modules decode with `DisallowUnknownFields`, and before this field there was no body both accepted. **Validated if present, never required:** a well-formed-but-unknown UUID is accepted (no tenant lookup — `quote` must not become an existence oracle), a malformed one is `400 validation_failed` with `details[]` = `[user_id:malformed]`, the same slug module 3 and this module's own `run`/`report` use; `""` is treated as absent. Making it required would break existing callers, which additive-only forbids |
 | POST | `/v1/run` | accept a job — body `{job_item_id, user_id}` (both UUIDs; `user_id` = owning tenant, REQUIRED) → create one `send_managed.jobs` row, return `202` immediately (async kickoff; never blocks on the send). The `job_item_id` must belong to `user_id` (else `404 not_found`). Duplicate `job_item_id` for the same tenant → clean `200` with the existing job (idempotent; never a raw `23505`). **One active campaign per user (Phase 4 §8, P4-7):** if `user_id` already has a DIFFERENT campaign active (any non-terminal job), the run is rejected outright with `409 conflict` (internal reason `user_campaign_active`) and creates ZERO job rows — enforced under a per-user Postgres advisory lock so concurrent attempts are genuinely serialized, not racy. **Fix-plan item 12 (`send_managed_0025`) — the dispatch rung gates intake at the two DEEPEST rungs only:** at `refuse_new` or `stopped` this route returns `503 paused` and creates ZERO job rows; at `serving` and `accept_and_defer` it accepts normally. Keeping intake open at `accept_and_defer` is the point of that rung existing — an operator halting sending should not also start losing customer submissions. The gate sits AFTER field validation, so a malformed body still gets its `400 validation_failed` rather than being masked by the pause (a caller must be able to fix their request during a halt), and BEFORE job creation, so a refusal is genuinely lossless rather than a row written then rejected. It fails **OPEN**: an unreadable, absent, or unrecognized `dispatch_mode` accepts the submission and logs at `level=error`, because refusing a submission may lose customer work permanently while accepting one that then sits queued is recoverable — the opposite disposition from `/v1/admin/health`, which fails closed (see its field table below). Note the asymmetry with the Control: a paused rung stops the dispatch loop from CLAIMING, so accepted work waits rather than sends |
-| GET | `/v1/report` | reflect a job's state — `?user_id=<uuid>` (REQUIRED tenant selector) plus `?job_id=` or `?job_item_id=`: returns `state`, `provider_message_id` (when `sent`), `completed_at`, `attempt_count` — clean external state only. **`provider_message_id`/`completed_at` are OMITTED (key absent, not `null`) until set** — a UI must check for key presence, not for `null`, on this single-job shape. A job owned by another tenant → `404 not_found` (no existence disclosure). **Phase 5 (§5.4):** a job WAITING for capacity — its only accounts self-recovering (throttle/daily-limit paused), or an unconfigured shared-pool chain — reads as clean pending `state:"queued"` (never `failed`, never an error, even if it waits until the next daily reset); a job whose entire resolved pool is truly exhausted (all accounts quarantined/disabled/manual-paused) reads `state:"failed"`. The internal reason (`pool_exhausted`, which accounts, why) is NEVER surfaced — two-vocabulary rule. **Phase 6 (§2):** a job RECLAIMED from a dead/hung worker (heartbeat-miss or lease-expiry) returns to clean pending `state:"queued"` with an incremented `attempt_count` (saturating) — the internal reclaim reason (`worker heartbeat missed`/`lease expired`, `actor='reclaim_loop'`) stays internal and is never surfaced; a persistently-reclaimed job never fails by attempt count (it fails only on true pool exhaustion, §2.5). **B8 (Phase 9 contract completion) — `?campaign_id=<uuid>` mode:** when `campaign_id` is present (instead of `job_id`/`job_item_id`), `report` returns the CAMPAIGN-scoped aggregate shape below rather than the single-job shape. |
+| GET | `/v1/report` | reflect a job's state — `?user_id=<uuid>` (REQUIRED tenant selector) plus `?job_id=` or `?job_item_id=`: returns `state`, `provider_message_id` (when `sent`), `completed_at`, `attempt_count`, and — additive, M2-G1 — **`reason`** and **`error_class`** (see "Why an item is in its state" below) — clean external state only. **`provider_message_id`/`completed_at` are OMITTED (key absent, not `null`) until set** — a UI must check for key presence, not for `null`, on this single-job shape. A job owned by another tenant → `404 not_found` (no existence disclosure). **Phase 5 (§5.4):** a job WAITING for capacity — its only accounts self-recovering (throttle/daily-limit paused), or an unconfigured shared-pool chain — reads as clean pending `state:"queued"` (never `failed`, never an error, even if it waits until the next daily reset); a job whose entire resolved pool is truly exhausted (all accounts quarantined/disabled/manual-paused) reads `state:"failed"` with `reason:"pool_exhausted"`; a job that has failed its SMTP attempts `job_max_failed_attempts` times (or whose first failed attempt is `job_failed_max_age_sec` old) also reads `state:"failed"`, with `reason:"attempts_exhausted"` — **`failed` has TWO writers since `send_managed_0028`, and `reason` is how a caller tells them apart.** Only the vocabulary NAME is surfaced: which accounts, the SMTP text and every other internal detail are NEVER surfaced — two-vocabulary rule. **Phase 6 (§2):** a job RECLAIMED from a dead/hung worker (heartbeat-miss or lease-expiry) returns to clean pending `state:"queued"` with an incremented `attempt_count` (saturating) — the internal reclaim reason (`worker heartbeat missed`/`lease expired`, `actor='reclaim_loop'`) stays internal and is never surfaced; a reclaim of a job that was `sending` counts as a failed SMTP attempt toward the attempt cap (`job_max_failed_attempts`), so a persistently-reclaimed job now ends `failed`/`attempts_exhausted`; the reclaim of a job that was only `assigned` (never reached a worker) counts for nothing. **B8 (Phase 9 contract completion) — `?campaign_id=<uuid>` mode:** when `campaign_id` is present (instead of `job_id`/`job_item_id`), `report` returns the CAMPAIGN-scoped aggregate shape below rather than the single-job shape. |
+| POST | `/v1/cancel` | **stop a campaign** (M2-G3) — body `{campaign_id, user_id}` (both UUIDs; `user_id` = owning tenant, REQUIRED, exactly as on `run`/`report`). Every **not-yet-claimed** item (`state:"queued"`) of that tenant's campaign becomes the new TERMINAL state **`cancelled`** (one `job_events` row each, `completed_at` set); items already `assigned`/`sending` are NOT touched in state — they **finish and report truthfully (sent / bounced / their failure path) exactly once**, and if their attempt fails they end `cancelled` instead of returning to `queued`. Response `200` `{"campaign_id","cancelled": n, "in_flight": m, "already_terminal": k}`: the campaign's position AFTER the call — `cancelled` = items in state cancelled, `in_flight` = assigned + sending (still finishing), `already_terminal` = sent + failed + bounced. **Idempotent:** a repeat call finds nothing left to cancel, changes and writes nothing, and answers the same numbers. A campaign that is **foreign or unknown** answers the SAME empty `200` `{cancelled:0, in_flight:0, already_terminal:0}` as one with nothing in it (the campaign report's own rule; never a cross-tenant existence signal). Errors as the sibling routes: `400 validation_failed` (`details[]` = `campaign_id`/`user_id` with `required`/`malformed`), `401 unauthenticated`, `405 method_not_allowed` (`Allow: POST`). **Not gated by the dispatch rung** — a tenant can stop its campaign at every rung, `stopped` included. A cancelled item can never be claimed again and never re-run under the same `job_item_id` (a repeat `run` answers the existing job, now `cancelled`). Acts on the items that exist when it runs: a `job_item` submitted for the same campaign afterwards is new work. Implemented in `internal/platformapi/cancel.go`; design in ADR-0016. |
 
 **B8 — the campaign-scoped `report` response** (`GET /v1/report?campaign_id=<uuid>&user_id=<uuid>`),
 derived ENTIRELY from `send_managed.jobs` state counts + existing per-job fields — no new state, no
@@ -360,14 +361,15 @@ schema change:
     "total": 5000,
     "sent": 4100,
     "bounced": 210,                   // terminal, recipient-fault, billable
-    "failed": 3,                      // terminal, infra/pool-exhaustion, refundable
+    "failed": 3,                      // terminal: pool exhaustion OR the attempt cap (see item reason); not charged
     "in_flight": 20,                  // assigned + sending
     "pending": 667,                   // queued and currently dispatchable
-    "waiting_for_capacity": 0         // queued but zero eligible account right now
+    "waiting_for_capacity": 0,        // queued but zero eligible account right now
+    "cancelled": 0                    // terminal; stopped by POST /v1/cancel (send_managed_0027) — never charged
   },
 
   "progress": {
-    "terminal": 4313,                 // sent + bounced + failed
+    "terminal": 4313,                 // sent + bounced + failed + cancelled
     "fraction_complete": 0.8626,      // terminal / total
     "is_complete": false              // true iff terminal == total
   },
@@ -375,7 +377,11 @@ schema change:
   "items": {                          // paginated per-job detail, cursor-paginated
     "results": [
       { "job_item_id": "…", "state": "sent",
-        "provider_message_id": "…", "completed_at": "…", "attempt_count": 1 }
+        "provider_message_id": "…", "completed_at": "…", "attempt_count": 1,
+        "reason": null, "error_class": null },        // M2-G1: ALWAYS present, null when empty
+      { "job_item_id": "…", "state": "failed",
+        "provider_message_id": null, "completed_at": "…", "attempt_count": 3,
+        "reason": "attempts_exhausted", "error_class": "unknown" }
     ],
     "next_cursor": "opaque-cursor-or-null",
     "page_size": 100
@@ -385,9 +391,10 @@ schema change:
 
 The three-way billing-relevant distinction a UI can render WITHOUT reading internal state-machine
 docs: `waiting_for_capacity` (still pending, no eligible account right now — a job here is
-`state:"queued"` at the per-item level, **never** shown as failed), `failed` (terminal, true pool
-exhaustion — refundable, the platform's own policy), `bounced` (terminal, recipient-permanent 550
-— billable). `waiting_for_capacity` is an AGGREGATE count distinction on top of the same
+`state:"queued"` at the per-item level, **never** shown as failed), `failed` (terminal — true pool
+exhaustion or the attempt cap; the message never reached the world, so not charged; the item's
+`reason` says which), `bounced` (terminal, recipient-permanent 550 — billable), `cancelled`
+(terminal, stopped by `POST /v1/cancel` — never charged). `waiting_for_capacity` is an AGGREGATE count distinction on top of the same
 `state:"queued"` per-job value (§6.4's rule that a waiting job renders as clean pending) — never a
 new per-job state. A `campaign_id` that belongs to another tenant, or does not exist, returns a
 clean EMPTY report (`total:0`) rather than `404` — a `campaign_id` is not a single-resource
@@ -399,7 +406,7 @@ cross-tenant existence signal either way (OD-25's principle, extended). Implemen
 **Items presence semantics (differs from the single-job shape above):** in `items.results`,
 `provider_message_id`/`completed_at` are **ALWAYS present as JSON keys**, valued `null` until set
 — unlike the single-job `report` shape, where the same two keys are omitted entirely until set. A
-UI integrating against both modes must check for `null` here but for key-absence there.
+UI integrating against both modes must check for `null` here but for key-absence there. (The two additive keys **`reason`** and **`error_class`** are the exception that proves the rule the other way: they are ALWAYS present as keys on BOTH shapes — `null` when there is nothing to say — so a client checks `null`, never absence, for them everywhere.)
 
 **Pagination request parameters** (`items`, cursor-paginated on `(created_at, id)`, same keyset
 pattern as the admin list endpoints, §5.1): `?campaign_id=<uuid>&user_id=<uuid>&cursor=<opaque,
@@ -407,7 +414,7 @@ from a previous response's next_cursor>&page_size=<int>`. `page_size` defaults t
 clamps to a max of **200**; a missing, zero, negative, or non-numeric `page_size` silently falls
 back to the default (never a `400`). `cursor` is opaque (base64) — pass back exactly what
 `next_cursor` returned; a malformed `cursor` returns `400 validation_failed`. `next_cursor:null`
-means the last page.
+means the last page. **The cursor names the LAST item the page returned** (M2-G5): the query fetches `page_size+1` rows only to learn whether another page exists, and the next page starts strictly after the last returned item. Until `send_managed_0028`'s release the cursor was built from the extra row instead, so the item at **every page boundary was skipped** — silently, for any campaign larger than `page_size`; a client that paged a larger campaign before this fix should re-read it. Walking `next_cursor` to `null` now returns exactly the campaign's items, once each, in `(created_at, id)` order (pinned by a multi-page exact-set test with a paired control that reproduces the old behaviour).
 | GET | `/v1/describe` | module self-description (Phase 9 §2, finalized): `capabilities` (honest — `sequences:false`, no tracking, `content_variation:true`) + `pricing` (`unit_price_credits` — the SAME live value `quote` multiplies by — and `tiers` — `shared`/`dedicated`, the one real V1 axis, **identical unit price in V1**; dedicated is isolation, not a premium — plus **`cost_fields_inert`** (bool, additive, audit finding **D22**/fix-plan item 5b): `true` when `unit_price_credits` is `0`, i.e. when `quote`'s `cost` is structurally zero rather than computed, so a cost-preview UI can tell "this module does not charge per recipient" from "the price lookup returned 0" — both are `200` with `cost:0` otherwise. Normally `false` here (this module charges, seeded `1`), but `unit_price_credits` is live-retunable with no redeploy, so an operator CAN put this module in that state — and under a declared `flat_per_recipient` model a `0` contradicts the model, which makes the declaration more load-bearing here, not less. **DERIVED from the live value on every request, never hardcoded**; the `unitprice_test.go` zero-retune block is the control that a literal `false` cannot pass) + **`model`** (`"flat_per_recipient"` — this module's own answer, unchanged; now emitted from the same constant the declared set below is built from, so the reported model and the declared set cannot be edited apart) + **`models[]`** (fix-plan item 6 — the platform's whole declared set of pricing models, `{flat_per_recipient, flat_subscription, free}`, ADDITIVE-ONLY per Rule 5; `model` above is always a MEMBER of it. `free` is declared though neither sender reports it, deliberately: the point of publishing the set is that a client writes its branch once and handles a module it has not met yet, so declaring only today's two values would make a third module's launch a client-side code change) + **`vocabularies{}`/`error_codes[]`** (fix-plan item 8 — see the dedicated note below) |
 
 **`GET /v1/describe`'s `vocabularies{}` and `error_codes[]`** (fix-plan item 8) — `capabilities` and
@@ -422,22 +429,23 @@ failure additive-only versioning was meant to prevent.
   `pg_enum` **LIVE on every request**, in the type's own `enumsortorder` (the order is part of the
   contract — a client rendering a legend of `queued→assigned→sending→sent` sees it): an operator who
   runs `ALTER TYPE … ADD VALUE` changes what `describe` publishes with **no code edit and no
-  redeploy**. Two are published: `job_state` (the only enum both `report` modes put in a body) and
+  redeploy**. Three are published: `job_state` (the only enum both `report` modes put in a body; seven values since `send_managed_0027` — `cancelled` is appended LAST, the six originals keep their places), `error_class`
+  (published since M2-G1: the report's items now carry it) and
   `pool_kind` (the tier axis IS the pool-kind axis — `quote.tier` and `pricing.tiers[].id` — so
   `db_enum` is the truthful description of where those ids come from; a test pins both directions
   against the live type, since `describeTiers` writes them as Go literals).
-  `source:"module_constant"` entries are the sets with no DB enum behind them (`details[].issue` and
-  `pricing.model`), and their `values[]` reference the SAME Go constants the emitting code path uses —
+  `source:"module_constant"` entries are the sets with no DB enum behind them (`details[].issue`,
+  `pricing.model` and — M2-G1 — **`item_reason`**, the closed set `reason` takes on every report item; a
+  test pins it BOTH directions against what the mapping can actually emit, and another against every real
+  dispatcher/outcome/reclaim/exhaustion/cancel path), and their `values[]` reference the SAME Go constants the emitting code path uses —
   never a re-typed literal. `fields[]` names the response paths that carry the value; every leaf is
   asserted to be a real JSON field in the production source, so a renamed response field cannot leave
   a dangling path.
-  **FIVE of this module's seven schema enums are DELIBERATELY absent**, each with a recorded reason —
+  **FOUR of this module's seven schema enums are DELIBERATELY absent**, each with a recorded reason —
   the exclusion list is the bulk of the accounting here, not a footnote on it, because module 2's
   users own neither accounts, pools, nor workers, so most of the schema's vocabularies describe
   infrastructure a tenant can neither see nor act on: `box_status` (worker-fleet state, operator-only),
-  `error_class` (internal failure classification; `report` publishes clean external state only, §6.3
-  — a deliberate divergence from module 3, which DOES publish it, because its users own their SMTP
-  accounts and can act on a class), `event_actor` (no Domain-A events route in this module),
+  `event_actor` (no Domain-A events route in this module),
   `pause_reason` (its OUTCOME is published, as the `waiting_for_capacity` count; the reason is not —
   a tenant cannot unpause an account it does not own), `routing_strategy` (operator-owned pools, so
   there is no per-user settings object to carry it). The accounting is gated in both directions —
@@ -536,6 +544,50 @@ failure additive-only versioning was meant to prevent.
 > ruled to wire only the two genuinely-new sub-values (the rate table, the skip-below threshold) onto
 > the existing keys' already-established delivery mechanism, and leave the two duplicate parameters
 > unconsumed rather than introduce a second, competing source of truth for the same worker behavior.
+
+## Why an item is in its state — `reason` and `error_class` (M2-G1, additive)
+
+Every item of the single-job report and of the campaign report carries two keys, **always present**
+(`null` when there is nothing to say): **`reason`**, a name from the closed vocabulary below (published live
+as `describe.vocabularies.item_reason`), and **`error_class`**, the class of the item's last failed attempt —
+an existing `send_managed.error_class` value (published live as `describe.vocabularies.error_class`:
+`bounce_permanent`, `transport_4xx`, `auth_failure`, `throttle`, `timeout`, `unknown`) or `null`.
+**Nothing but those names ever crosses the wire**: no SMTP text, no account, no pool, no worker, no hostname
+(two-vocabulary rule; pinned by a test that stuffs the stored error text with all of them and greps both
+responses).
+
+```jsonc
+// GET /v1/report?job_id=…&user_id=…   (single-job shape; the two optional keys are still omitted until set)
+{ "job_id": "…", "state": "failed", "attempt_count": 3, "completed_at": "…",
+  "reason": "attempts_exhausted", "error_class": "unknown" }
+{ "job_id": "…", "state": "sent", "attempt_count": 1, "provider_message_id": "…", "completed_at": "…",
+  "reason": null, "error_class": null }
+```
+
+| state | `reason` | `error_class` |
+|---|---|---|
+| `sent` | `null` | `null` — always, even when an earlier attempt failed |
+| `bounced` | `bounce_permanent` | `bounce_permanent` |
+| `failed` | `pool_exhausted` (the pool had no usable account) or `attempts_exhausted` (the attempt cap: `job_max_failed_attempts` failed attempts, or `job_failed_max_age_sec` since the first one) | the last failed attempt's class, or `null` if it never reached SMTP |
+| `cancelled` | `cancelled` | the class of an attempt that failed while the cancel was landing, else `null` |
+| `assigned` / `sending` | `null` | the previous attempt's class, or `null` |
+| `queued` | why it is **still** queued, most immediate cause first: `dispatch_paused` (the effective rung is not `serving`), `waiting_for_capacity` (the tenant has no eligible account right now — the same predicate as `totals.waiting_for_capacity` — or the last handoff found no worker / failed to push), `no_eligible_account` (the dispatcher'"'"'s last attempt found no account for this item), else the last failed attempt'"'"'s class (`transport_4xx`, `auth_failure`, `throttle`, `timeout`, `unknown`), else `null` (it has not been tried) | the last failed attempt'"'"'s class, or `null` |
+
+The vocabulary, in contract order, is `pool_exhausted`, `attempts_exhausted`, `bounce_permanent`,
+`cancelled`, `transport_4xx`, `auth_failure`, `throttle`, `timeout`, `unknown`, `no_eligible_account`,
+`waiting_for_capacity`, `dispatch_paused`. **Additive-only**: a reason is appended, never renamed or removed.
+A queued item'"'"'s reason reflects the LIVE database at the moment of the read, in both shapes, so the same
+item can read `dispatch_paused` during a pause and `transport_4xx` after it; a settled item'"'"'s reason never
+changes. A `failed` row written before `send_managed_0028` (whose only writer was pool exhaustion) reads
+`pool_exhausted`.
+
+**The attempt cap and what it counts** (`job_max_failed_attempts`, default 6; `job_failed_max_age_sec`,
+default 86400 — `Docs/config-reference.md`). A *failed attempt* is a worker-reported classified failure or the
+reclaim of a job that was `sending`; a dispatcher-side requeue that never reached SMTP (no account, no worker,
+the push failed, the header-injection guard) is **never** counted — those mean *waiting*, not *failed*. The
+6th failed attempt (not the 5th) moves the job to `failed`/`attempts_exhausted` with `completed_at` and an
+event row; the message never reached the world, so the platform does not charge for it. Before this, `failed`
+had exactly one writer (pool exhaustion) and a persistent 554 requeued forever.
 
 ## What is NOT part of the public REST contract
 

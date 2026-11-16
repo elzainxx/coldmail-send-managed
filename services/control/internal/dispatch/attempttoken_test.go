@@ -108,6 +108,11 @@ func TestAttemptToken_MonotonicAndNonSaturating(t *testing.T) {
 	}
 
 	job := e.seedQueuedJob(t, "mono@example.com")
+	// SWEEP (send_managed_0028, M2-G2): six failed attempts on one job reach the DEFAULT attempt cap
+	// (job_max_failed_attempts=6) and the sixth would end it as failed/attempts_exhausted. This test measures
+	// two COUNTERS (attempt_token vs the saturating attempt_count), not the cap, so the cap is raised out of
+	// its way; attempts_cap_test.go asserts the cap itself at the seeded default.
+	e.setConfigInt(t, "job_max_failed_attempts", 1000)
 	const attempts = 6 // > max_attempts (3), so attempt_count must saturate
 	var tokens []int64
 	var counts []int

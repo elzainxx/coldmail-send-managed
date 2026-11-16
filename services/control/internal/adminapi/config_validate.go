@@ -130,6 +130,21 @@ func validateConfigValue(key, valueType string, value json.RawMessage) *apiError
 		if n, ok := asInt(value); !ok || n <= 0 {
 			return typeErr(key, issueOutOfRange, "config_throttle_pause_seconds_out_of_range")
 		}
+	case "job_max_failed_attempts":
+		// send_managed_0028 (M2-G2, the attempt cap): 1-1000 failed SMTP attempts. 0 is REJECTED, not
+		// "disabled": a cap of 0 would fail every job on its first failed attempt, and "never cap" is
+		// spelled with a large number, not with a zero that means the opposite of what it says. The
+		// Control's LoadConfig refuses a stored value below 1 as well (dispatch/config.go) — this is the
+		// operator-feedback layer, so the mistake is reported in the response to the PUT.
+		if n, ok := asInt(value); !ok || n < 1 || n > 1000 {
+			return typeErr(key, issueOutOfRange, "config_job_max_failed_attempts_out_of_range")
+		}
+	case "job_failed_max_age_sec":
+		// send_managed_0028 (M2-G2, the age cap): 60 s to 30 days. A floor of one minute keeps a typo
+		// (a value in minutes or in hours typed as seconds) from failing every retrying job at once.
+		if n, ok := asInt(value); !ok || n < 60 || n > 2592000 {
+			return typeErr(key, issueOutOfRange, "config_job_failed_max_age_sec_out_of_range")
+		}
 	case "status_score_weights":
 		// Phase 5 §3.2 inner shape: all five keys present, weights/params numeric and non-negative,
 		// fail_saturation and recency_horizon_hours strictly positive (they are divisors). A bad

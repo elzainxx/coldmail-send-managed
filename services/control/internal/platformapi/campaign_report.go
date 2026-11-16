@@ -7,11 +7,15 @@ package platformapi
 //
 // The three-way distinction a UI must render without reading internal state-machine docs (§2.3):
 // waiting_for_capacity (still pending, no eligible account right now — NEVER shown as failed),
-// failed (terminal, true pool exhaustion — refundable, platform's policy), bounced (terminal,
-// recipient-permanent — billable). All three, plus plain pending, are surfaced as aggregate COUNTS
-// in totals — the per-item state stays exactly the send_managed.job_state enum value (queued/assigned/
-// sending/sent/failed/bounced); waiting_for_capacity is an AGGREGATE distinction, not a new
-// per-job state (§2.3).
+// failed (terminal — pool exhaustion OR the attempt cap; refundable, platform's policy), bounced
+// (terminal, recipient-permanent — billable). All three, plus plain pending, are surfaced as aggregate
+// COUNTS in totals — the per-item state stays exactly the send_managed.job_state enum value (queued/
+// assigned/sending/sent/failed/bounced/cancelled); waiting_for_capacity is an AGGREGATE distinction, not
+// a new per-job state (§2.3).
+//
+// Since send_managed_0027/0028: `cancelled` is a seventh, TERMINAL state (POST /v1/cancel) and totals
+// gain `cancelled`; and every item carries `reason` + `error_class` (item_reason.go) saying WHY it is in
+// its state — which is how a caller tells a pool_exhausted failure from an attempts_exhausted one.
 
 import (
 	"context"
@@ -32,6 +36,10 @@ type campaignTotals struct {
 	InFlight           int `json:"in_flight"`
 	Pending            int `json:"pending"`
 	WaitingForCapacity int `json:"waiting_for_capacity"`
+	// Cancelled (additive, send_managed_0027/0028): items POST /v1/cancel stopped. TERMINAL: it is part of
+	// progress.terminal and therefore of is_complete, so a cancelled campaign reads as complete once its
+	// in-flight items have finished — and it is never charged (nothing was sent).
+	Cancelled int `json:"cancelled"`
 }
 
 // campaignItem mirrors one entry of §2.2's "items.results" array — the SAME clean external
@@ -42,6 +50,12 @@ type campaignItem struct {
 	ProviderMessageID *string `json:"provider_message_id"`
 	CompletedAt       *string `json:"completed_at"`
 	AttemptCount      int     `json:"attempt_count"`
+	// Reason / ErrorClass (additive, M2-G1): why the item is in this state, and the class of its last
+	// failed attempt. Both are ALWAYS present as keys, null when there is nothing to say — the same
+	// presence rule as provider_message_id/completed_at on this shape. Vocabulary and derivation:
+	// item_reason.go. Never SMTP text, an account, or a provider internal.
+	Reason     *string `json:"reason"`
+	ErrorClass *string `json:"error_class"`
 }
 
 // handleCampaignReport serves GET /v1/report?campaign_id=<id> (B8, §2.1-§2.4). Scoped to the
@@ -73,18 +87,28 @@ func (s *Server) handleCampaignReport(w http.ResponseWriter, r *http.Request, ca
 		s.fail(w, r, newErr(codeInternalError, "campaign_report_totals_failed"))
 		return
 	}
-	items, nextCursor, err := s.campaignItems(ctx, campaignID, userID, cur, pageSize)
-	if err != nil {
-		s.fail(w, r, newErr(codeInternalError, "campaign_report_items_failed"))
-		return
-	}
 	dispatchPaused, err := s.readDispatchPaused(ctx)
 	if err != nil {
 		s.fail(w, r, newErr(codeInternalError, "campaign_report_dispatch_state_failed"))
 		return
 	}
+	// The two LIVE facts a queued item's reason can hang on. WaitingForCapacity is derived from the totals
+	// already computed above: the predicate is a property of the TENANT (no eligible account in any pool it
+	// can reach), not of the row, so if this campaign has any queued item and the tenant has no capacity,
+	// totals.waiting_for_capacity counts every queued item and is > 0 — and if the tenant has capacity it is 0.
+	// Reading it back here means "waiting" cannot mean two different things inside one response.
+	items, nextCursor, err := s.campaignItems(ctx, campaignID, userID, cur, pageSize, reasonContext{
+		DispatchPaused:     dispatchPaused,
+		WaitingForCapacity: totals.WaitingForCapacity > 0,
+	})
+	if err != nil {
+		s.fail(w, r, newErr(codeInternalError, "campaign_report_items_failed"))
+		return
+	}
 
-	terminal := totals.Sent + totals.Bounced + totals.Failed
+	// cancelled is TERMINAL (send_managed_0027): an item the platform stopped is as settled as one that
+	// was sent, so it counts toward progress and is_complete.
+	terminal := totals.Sent + totals.Bounced + totals.Failed + totals.Cancelled
 	fractionComplete := 0.0
 	if totals.Total > 0 {
 		fractionComplete = float64(terminal) / float64(totals.Total)
@@ -145,6 +169,7 @@ SELECT
     COUNT(*) FILTER (WHERE state = 'sent') AS sent,
     COUNT(*) FILTER (WHERE state = 'bounced') AS bounced,
     COUNT(*) FILTER (WHERE state = 'failed') AS failed,
+    COUNT(*) FILTER (WHERE state = 'cancelled') AS cancelled,
     COUNT(*) FILTER (WHERE state IN ('assigned', 'sending')) AS in_flight,
     COUNT(*) FILTER (WHERE state = 'queued') AS pending_total,
     COUNT(*) FILTER (WHERE state = 'queued' AND NOT EXISTS (
@@ -156,7 +181,7 @@ FROM scoped`
 	var totals campaignTotals
 	var pendingTotal int
 	if err := s.db.QueryRow(ctx, q, campaignID, userID, tz, throttleSec, hour).Scan(
-		&totals.Total, &totals.Sent, &totals.Bounced, &totals.Failed, &totals.InFlight,
+		&totals.Total, &totals.Sent, &totals.Bounced, &totals.Failed, &totals.Cancelled, &totals.InFlight,
 		&pendingTotal, &totals.WaitingForCapacity); err != nil {
 		return campaignTotals{}, err
 	}
@@ -191,10 +216,75 @@ const campaignEligibleAccountsSubquery = `
                 AND a.daily_sent_count < a.daily_limit)
           )`
 
+// reasonContext carries the two LIVE facts a queued item's `reason` can depend on (item_reason.go): they
+// are properties of the module and the tenant at this moment, not of any one row, so they are computed once
+// per response and handed to every item.
+type reasonContext struct {
+	DispatchPaused     bool
+	WaitingForCapacity bool
+}
+
+// campaignItemKey is the keyset position of one returned row: the sort key pair the cursor encodes.
+type campaignItemKey struct {
+	createdAt time.Time
+	id        string
+}
+
+// tenantHasEligibleCapacity reports whether ANY pool this tenant can reach (its own enabled dedicated
+// pools plus the enabled shared ones) has an eligible account right now — the SAME predicate, byte for
+// byte, as the `waiting_for_capacity` count in campaignTotals (it reuses campaignEligibleAccountsSubquery
+// and the same three config reads), so a queued item can never be called "waiting" by one route and
+// "pending" by the other. The single-job report uses it for a queued item's `reason`; the campaign report
+// does not need it (it reads the answer back from its own totals).
+//
+// $1 is bound to the tenant AND referenced only through a no-op cast: campaignEligibleAccountsSubquery
+// hard-codes its parameters as $3/$4/$5 to match campaignTotals' ($1 campaign, $2 tenant), and Postgres
+// refuses a statement whose parameter list has a hole ("could not determine data type of parameter $1").
+func (s *Server) tenantHasEligibleCapacity(ctx context.Context, userID string) (bool, error) {
+	tz, err := s.readConfigStringLocal(ctx, "daily_reset_timezone", "UTC")
+	if err != nil {
+		return false, err
+	}
+	throttleSec, err := s.readConfigIntLocal(ctx, "throttle_pause_seconds", 900)
+	if err != nil {
+		return false, err
+	}
+	hour, err := s.readConfigIntLocal(ctx, "daily_reset_hour", 0)
+	if err != nil {
+		return false, err
+	}
+	const q = `
+WITH user_pools AS (
+    SELECT p.id AS pool_id
+    FROM send_managed.pools p
+    WHERE p.enabled = TRUE
+      AND (p.owner_user_id = $2::uuid OR p.kind = 'shared')
+)
+SELECT ($1::text IS NOT NULL) AND EXISTS (
+    SELECT 1 FROM user_pools up
+    WHERE EXISTS (` + campaignEligibleAccountsSubquery + `)
+)`
+	var ok bool
+	if err := s.db.QueryRow(ctx, q, userID, userID, tz, throttleSec, hour).Scan(&ok); err != nil {
+		return false, err
+	}
+	return ok, nil
+}
+
 // campaignItems returns one page of per-job detail (§2.2 "items"), cursor-paginated on
 // (created_at, id) — the same keyset pattern the admin surface uses (§5.1 pagination
 // conventions), tenant-scoped.
-func (s *Server) campaignItems(ctx context.Context, campaignID, userID string, cur *reportCursor, pageSize int) ([]campaignItem, *string, error) {
+//
+// THE CURSOR IS BUILT FROM THE LAST ROW RETURNED, never from the extra one (M2-G5). The query asks for
+// pageSize+1 rows for exactly one purpose — to learn whether another page exists — and the next page then
+// starts STRICTLY AFTER the cursor row. This function used to keep overwriting its "last row" variables on
+// every Scan, so after the loop they held the (pageSize+1)th row, which is the row that was NOT returned:
+// the cursor pointed past it, and it was skipped on the next page, one item lost at every page boundary
+// and silently (every page looked complete, next_cursor was well-formed, the final page ended on null).
+// Safe only for a campaign of at most page_size items, which is why nothing noticed. The fix keeps every
+// returned row's key and takes the cursor from the pageSize-th; the extra row is dropped after it has
+// served its one purpose.
+func (s *Server) campaignItems(ctx context.Context, campaignID, userID string, cur *reportCursor, pageSize int, rc reasonContext) ([]campaignItem, *string, error) {
 	args := []any{campaignID, userID}
 	where := "WHERE j.campaign_id = $1 AND j.user_id = $2"
 	if cur != nil {
@@ -204,6 +294,7 @@ func (s *Server) campaignItems(ctx context.Context, campaignID, userID string, c
 	args = append(args, pageSize+1)
 	limitParam := len(args)
 	q := `SELECT j.job_item_id::text, j.state::text, j.provider_message_id, j.completed_at, j.attempt_count,
+	             j.last_error_class::text, j.last_error_message, j.terminal_reason,
 	             j.created_at, j.id::text
 	      FROM send_managed.jobs j ` + where + `
 	      ORDER BY j.created_at ASC, j.id ASC
@@ -216,20 +307,31 @@ func (s *Server) campaignItems(ctx context.Context, campaignID, userID string, c
 	defer rows.Close()
 
 	items := []campaignItem{}
-	var lastCreatedAt time.Time
-	var lastID string
+	keys := []campaignItemKey{}
 	for rows.Next() {
 		var it campaignItem
 		var completedAt *time.Time
+		var lastClass, lastMsg, termReason *string
+		var key campaignItemKey
 		if err := rows.Scan(&it.JobItemID, &it.State, &it.ProviderMessageID, &completedAt, &it.AttemptCount,
-			&lastCreatedAt, &lastID); err != nil {
+			&lastClass, &lastMsg, &termReason,
+			&key.createdAt, &key.id); err != nil {
 			return nil, nil, err
 		}
 		if completedAt != nil {
 			s := completedAt.UTC().Format("2006-01-02T15:04:05Z")
 			it.CompletedAt = &s
 		}
+		it.Reason, it.ErrorClass = itemOutcome(itemFacts{
+			State:              it.State,
+			TerminalReason:     termReason,
+			LastErrorClass:     lastClass,
+			LastErrorMessage:   lastMsg,
+			DispatchPaused:     rc.DispatchPaused,
+			WaitingForCapacity: rc.WaitingForCapacity,
+		})
 		items = append(items, it)
+		keys = append(keys, key)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, err
@@ -237,8 +339,10 @@ func (s *Server) campaignItems(ctx context.Context, campaignID, userID string, c
 
 	var nextCursor *string
 	if len(items) > pageSize {
+		// has-more comes from the extra row; the cursor comes from the last row we are RETURNING.
+		last := keys[pageSize-1]
 		items = items[:pageSize]
-		c := encodeReportCursor(lastCreatedAt.Format(time.RFC3339Nano), lastID)
+		c := encodeReportCursor(last.createdAt.Format(time.RFC3339Nano), last.id)
 		nextCursor = &c
 	}
 	return items, nextCursor, nil

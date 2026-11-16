@@ -82,3 +82,8 @@ dispatch_mode|DispatchMode
 # pattern, so a second `|` is an alternation inside the pattern, not a third field.
 autopause_mode|AutopauseDecides|AutopauseWrites
 retention_mode|RetentionCounts|RetentionDeletes
+# send_managed_0028 — the attempt cap (M2-G2). Both are read by LoadConfig into Config and consumed where a
+# failed attempt is recorded: outcome.go (a worker-reported failure) and reclaim.go (a reclaim of a SENDING
+# job), through attempts_cap.go's one predicate.
+job_max_failed_attempts|JobMaxFailedAttempts
+job_failed_max_age_sec|JobFailedMaxAgeSec

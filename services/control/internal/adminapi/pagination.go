@@ -33,7 +33,10 @@ func parseLimit(r *http.Request) int {
 	return n
 }
 
-// cursor carries the keyset position. created_at is an RFC3339-ish string as stored/serialized.
+// cursor carries the keyset position. CreatedAt is the sort key at FULL microsecond precision
+// ("2006-01-02T15:04:05.000000Z"), NOT the second-truncated created_at the resources serialize: a cursor
+// that rounds the sort key down compares as earlier than the row it names and re-admits it (and every row
+// of the same second) on the next page. Handlers build it from the resource's unexported cursorTS.
 type cursor struct {
 	CreatedAt string
 	ID        string
@@ -58,7 +61,8 @@ func parseCursor(r *http.Request) (*cursor, *apiError) {
 	return &cursor{CreatedAt: parts[0], ID: parts[1]}, nil
 }
 
-// encodeCursor builds the opaque next_cursor from the last item's keyset.
+// encodeCursor builds the opaque next_cursor from the LAST RETURNED item's keyset (the page's own final
+// row — never the extra row fetched only to learn whether another page exists).
 func encodeCursor(createdAt, id string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(createdAt + "|" + id))
 }

@@ -5,8 +5,9 @@ Authoritative source: **Phase 9 §4** (`history/phase-9-polish-and-documentation
 grew from 14 to 17 keys post-Chunk-5). This file is the checked-in mirror, verified by the
 CI `config_drift` gate against the live `send_managed.config` seeds.
 
-**Current total: 57 keys** — 14 (`0010`) + 3 (`0017`) + 2 (`0018`) + 6 (`0019`) + 17 (`0020`) +
-12 (`0021`+`0023`) + 1 (`0025`, fix-plan item 12) + 2 (`0026`, fix-plan item 13). This number is a
+**Current total: 59 keys** — 14 (`0010`) + 3 (`0017`) + 2 (`0018`) + 6 (`0019`) + 17 (`0020`) +
+12 (`0021`+`0023`) + 1 (`0025`, fix-plan item 12) + 2 (`0026`, fix-plan item 13) + 2 (`0028`, the
+attempt cap, M2-G2). This number is a
 convenience for the reader, not the gate: `config_drift` diffs the live key set against
 `config-manifest.txt` and against this file's tables, so a stale count here is a doc bug while a stale
 key is a build failure.
@@ -16,7 +17,7 @@ key is a build failure.
 `send_managed.config` is created in Phase 1 (`send_managed_0010`), seeding the **14 foundation keys** below
 (Phase 9 §4.1). Later phases append their keys (Phase 5 `send_managed_0017`, Phase 6 `send_managed_0018`,
 Phase 7 `send_managed_0019`, Phase 8 `send_managed_0020`, Phase 9.5 `send_managed_0021`, then the fix-plan
-alignment keys `send_managed_0025`/`send_managed_0026`) growing to the current 57-key
+alignment keys `send_managed_0025`/`send_managed_0026`, then the attempt-cap keys `send_managed_0028`) growing to the current 59-key
 total. The drift gate diffs the **phase-aware manifest** (`config-manifest.txt`) against the
 live `send_managed.config` key set AND this table — all three must match, which is what makes "no
 hardcoded tuning constant" structurally checkable. `default_value` is never mutated.
@@ -337,3 +338,41 @@ promoting one to a real dial is a future additive migration, not a silent defaul
 See `Docs/history/open-decisions.md`'s Phase 4 closeout ("hardcoded-timeout triage") for the full
 historical enumeration and reasoning; this table is the Phase 9 §4 consolidation of the same
 audit, re-verified against the current tree.
+
+## The attempt cap (+2 keys, `send_managed_0028`) — M2-G2: a job that keeps failing now ends
+
+**The gap this closes.** Exactly ONE writer produced the terminal state `failed` — pool exhaustion — and
+every other SMTP failure that was not a hard recipient bounce returned the job to `queued` with
+**unbounded** retries (`attempt_count` only saturates, at `max_attempts = 3`, to keep a CHECK honest). A
+persistent `554`, a policy rejection or a dead credential therefore never became terminal until the whole
+pool ran dry, and the platform, which settles money per item, had no answer to give. These two dials bound
+it. A job that reaches either is moved to the terminal state `failed` with **reason `attempts_exhausted`**
+(visible as `reason` on `GET /v1/report`; pool exhaustion keeps its own reason `pool_exhausted`) — through
+the same state-guarded UPDATE that would otherwise have requeued it, with `completed_at` set and a
+`sending → failed` `job_events` row carrying the failure class. **The message never reached the world, so
+the platform does not charge for it.**
+
+**What counts as a failed attempt — and what does not.** Counted, in the new `jobs.failed_attempt_count` /
+`jobs.first_failed_at` columns: a worker-reported classified failure (`transport_4xx`, `auth_failure`,
+`throttle`, `timeout`, `unknown`) and the reclaim loop's `timeout` of a job that was **`sending`** (the
+worker had it and never reported). **Never counted:** a dispatcher-side requeue that did not reach SMTP —
+`no_eligible_account`, `no_worker_available`, `push_failed`, the header-injection guard — and the reclaim of
+a job that was only `assigned` (claimed, never pushed). Those mean *waiting*, not *failed*: a worker outage
+must not terminate every queued job. This is why the counters are new columns and not `attempt_count`, which
+every one of those paths bumps.
+
+**When it is evaluated.** At the moment a failed attempt is recorded — never by a sweep. A job that is merely
+waiting (no eligible account, dispatch paused, no worker) is never failed by age: nothing is being attempted
+and nothing is failing. The age clock starts at the job's **first failed attempt**, not at its creation.
+
+| key | default_value | value_type | seeding migration | description |
+|-----|---------------|-----------|-------------------|-------------|
+| `job_max_failed_attempts` | `{"v":6}` | integer | send_managed_0028 | Failed SMTP attempts a job may accumulate before it is moved to `failed`/`attempts_exhausted`. **6 by default: the 6th failed attempt is the one that ends the job; a job with 5 failures is still `queued`.** Range **1–1000**: `0` is **rejected** at the admin `PUT` and again at config load (it would fail every job on its first failed attempt; "no cap in practice" is spelled with a large number). Read fresh on every outcome and every reclaim tick, so a change applies to the very next failed attempt, in both directions. Consumed by `internal/dispatch/attempts_cap.go` via `outcome.go` and `reclaim.go`. |
+| `job_failed_max_age_sec` | `{"v":86400}` | integer | send_managed_0028 | Maximum age, in seconds, of a job that has had at least one failed SMTP attempt, counted from its **first failed attempt**. When a further failed attempt is recorded and the job is at least this old, it is moved to `failed`/`attempts_exhausted` even if `job_max_failed_attempts` has not been reached. **86400 (24 hours) by default.** Range **60–2592000** (1 minute to 30 days). Evaluated when a failed attempt is recorded, not by a sweep. Consumed by `internal/dispatch/attempts_cap.go` via `outcome.go` and `reclaim.go`. |
+
+**Operator notes.** (1) The cap is **enforcing from the first migrated tick** — unlike the shadow ladders
+above it has no `off/shadow/enforce` mode, by the owner's ruling: the two numeric dials ARE the control. To
+effectively disable it, raise `job_max_failed_attempts` (1000) and `job_failed_max_age_sec` (30 days).
+(2) A job that already holds more than the new cap when the dial is lowered is failed on its **next** failed
+attempt, not retroactively. (3) The cap composes with, and does not replace, account health: auto-quarantine
+and auto-pause still act on the account at every failed attempt; the cap acts on the **job**.

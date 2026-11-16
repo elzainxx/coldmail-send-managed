@@ -47,6 +47,7 @@ type queueCounts struct {
 	Sent               int
 	Failed             int
 	Bounced            int
+	Cancelled          int
 	WaitingForCapacity int
 }
 
@@ -197,6 +198,8 @@ func queryQueueCounts(ctx context.Context, db *pgxpool.Pool) (queueCounts, error
 			q.Failed = n
 		case "bounced":
 			q.Bounced = n
+		case "cancelled":
+			q.Cancelled = n
 		}
 	}
 	if err := rows.Err(); err != nil {

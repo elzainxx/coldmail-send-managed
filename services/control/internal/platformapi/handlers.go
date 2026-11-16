@@ -272,12 +272,45 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 			withDetails(fieldDetail{Field: field, Issue: issueNotFound}))
 		return
 	}
+	// WHY the item is in this state (M2-G1, item_reason.go). The two live facts only matter to a QUEUED
+	// item, so they are read only for one — a sent/failed/bounced/cancelled report costs no extra query.
+	// A failed read fails the request rather than guessing, like the campaign report's own
+	// dispatch_paused: a wrong reason is the same lie in a smaller font.
+	facts := itemFacts{
+		State:            rep.state,
+		TerminalReason:   rep.terminalReason,
+		LastErrorClass:   rep.lastErrorClass,
+		LastErrorMessage: rep.lastErrorMessage,
+	}
+	if rep.state == "queued" {
+		paused, perr := s.readDispatchPaused(ctx)
+		if perr != nil {
+			s.fail(w, r, newErr(codeInternalError, "report_dispatch_state_failed"))
+			return
+		}
+		facts.DispatchPaused = paused
+		if !paused {
+			capacity, cerr := s.tenantHasEligibleCapacity(ctx, userID)
+			if cerr != nil {
+				s.fail(w, r, newErr(codeInternalError, "report_capacity_failed"))
+				return
+			}
+			facts.WaitingForCapacity = !capacity
+		}
+	}
+	reason, errorClass := itemOutcome(facts)
+
 	// Clean external state ONLY (§6.3): job_id, state, provider_message_id (when sent),
-	// completed_at, attempt_count. NEVER the SMTP text, error_reason, credential, or internal reason.
+	// completed_at, attempt_count, and — additive, M2-G1 — `reason` / `error_class`, which are ALWAYS
+	// present as keys (null when there is nothing to say), unlike the two optional keys below that are
+	// omitted until set. NEVER the SMTP text, error_reason, credential, or internal reason: reason is a
+	// name from the published item_reason vocabulary and error_class an existing enum label.
 	out := map[string]any{
 		"job_id":        rep.jobID,
 		"state":         rep.state,
 		"attempt_count": rep.attemptCount,
+		"reason":        reason,
+		"error_class":   errorClass,
 	}
 	if rep.providerMessageID != nil {
 		out["provider_message_id"] = *rep.providerMessageID

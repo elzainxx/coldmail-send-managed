@@ -120,10 +120,16 @@ type exposedDBEnum struct {
 // notExposedDBEnums (so a NEW enum cannot be quietly ignored, and a newly-exposed one cannot stay
 // undeclared).
 //
-// ONLY TWO OF THIS MODULE'S SEVEN ENUMS reach Domain A, and that is the honest answer rather than a
+// THREE OF THIS MODULE'S SEVEN ENUMS reach Domain A, and that is the honest answer rather than a
 // gap: module 2's users do not own accounts, pools, or workers, so most of the schema's vocabularies
 // describe infrastructure a tenant can neither see nor act on. See notExposedDBEnums for the other
-// five, each with its reason.
+// four, each with its reason. error_class joined the published set with M2-G1 (item_reason.go): the
+// report now carries `error_class` on every item, so the value set a client branches on has to be
+// published like any other. Until then it was deliberately withheld, on the grounds that a tenant does
+// not own the pool and could neither see nor fix what a class names. The platform that settles these
+// items is a first-class caller that needs to know WHY an item ended, so the CLASS is now published —
+// a short fixed label — while everything behind it stays private: the SMTP text, the account, the
+// pool and the worker are still never serialized (item_reason.go's header).
 //
 // pool_kind IS declared db_enum even though the two tier ids reach the wire as Go literals
 // (describeTiers, defaultQuoteTier) rather than from a query. The values are pool_kind's — the tier
@@ -137,6 +143,7 @@ type exposedDBEnum struct {
 var exposedDBEnums = []exposedDBEnum{
 	{Type: "job_state", Fields: []string{"run.state", "report.state", "report.items.results[].state"}},
 	{Type: "pool_kind", Fields: []string{"quote.tier", "describe.pricing.tiers[].id"}},
+	{Type: "error_class", Fields: []string{"report.error_class", "report.items.results[].error_class"}},
 }
 
 // notExposedDBEnums is the DELIBERATE other half of the accounting: a send_managed enum type that this
@@ -148,12 +155,6 @@ var exposedDBEnums = []exposedDBEnum{
 var notExposedDBEnums = map[string]string{
 	"box_status": "worker-fleet state. Operator-only (/v1/admin/health); no Domain-A response " +
 		"carries it — a platform tenant has no worker to reason about.",
-	"error_class": "internal failure classification (job_events, send_logs). report publishes CLEAN " +
-		"external state only (§6.3) — state/provider_message_id/completed_at/attempt_count — never the " +
-		"SMTP text or its classification, which drives retry/quarantine policy inside the dispatcher and " +
-		"is operator context. This is a DELIBERATE divergence from module 3, which does publish " +
-		"error_class: its users own the SMTP accounts and can act on a class, whereas this module's " +
-		"users do not own the pool, so the class would name infrastructure they can neither see nor fix.",
 	"event_actor": "job_events.actor / account_events.actor — who caused a transition. Domain A has " +
 		"no events route in this module (the account and event surfaces are operator-only, " +
 		"/v1/admin/accounts/{id}/events); a tenant has no dispatcher, worker, or reclaim loop to reason " +
@@ -195,6 +196,15 @@ var staticVocabularies = []staticVocabulary{
 		Name:   "pricing_model",
 		Values: pricingModels,
 		Fields: []string{"describe.pricing.model"},
+	},
+	{
+		// M2-G1: the closed set `reason` takes on every item of the single-job and campaign reports. NOT a
+		// pg enum (it mixes a column's recorded reasons with live conditions and the error-class labels), so
+		// it is a module_constant, and item_reason_test.go pins it BOTH directions against what itemOutcome
+		// can actually produce: a reason emitted but not declared, or declared but unreachable, fails.
+		Name:   "item_reason",
+		Values: itemReasons,
+		Fields: []string{"report.reason", "report.items.results[].reason"},
 	},
 }
 

@@ -156,7 +156,10 @@ func TestPolicy_ThrottlePauses(t *testing.T) {
 // TestPolicy_AttemptCountSaturates — the retry-model reconciliation (§6.2): a job requeued MORE
 // than max_attempts times has attempt_count rise to max_attempts and then STAY there, with NO
 // 23514 CHECK violation ever, and the job is NEVER failed by reaching the cap (it stays queued).
-// This is the teeth of "job failure is decoupled from attempt_count; only pool exhaustion fails."
+// This is the teeth of "job failure is decoupled from attempt_count" — which survives send_managed_0028
+// (the attempt cap counts failed SMTP attempts in its OWN columns, never in attempt_count). The other half
+// of that sentence, "only pool exhaustion fails", did NOT survive it: that is the assumption this test was
+// swept for, and the reason it now raises job_max_failed_attempts out of the way (see below).
 func TestPolicy_AttemptCountSaturates(t *testing.T) {
 	e := newDispatchEnv(t, "saturate")
 	ctx := context.Background()
@@ -172,6 +175,15 @@ func TestPolicy_AttemptCountSaturates(t *testing.T) {
 		t.Fatalf("seed last_success_at: %v", err)
 	}
 	job := e.seedQueuedJob(t, "c@example.com")
+
+	// SWEEP (send_managed_0028, M2-G2): this test used to rest on "only pool exhaustion fails a job". The
+	// attempt cap changed that: at the seeded default (job_max_failed_attempts=6) the SIXTH failed attempt
+	// below WOULD end the job as failed/attempts_exhausted, which is exactly what attempts_cap_test.go now
+	// asserts. This test is about something else — that attempt_count SATURATES at max_attempts without a
+	// 23514 — so it takes the cap out of the picture by raising the dial, rather than being rewritten to
+	// expect a failure it is not about. (Raising a dial is the supported way to say "no cap"; the cap's own
+	// behaviour is asserted with the dial at its default in attempts_cap_test.go.)
+	e.setConfigInt(t, "job_max_failed_attempts", 1000)
 
 	// max_attempts defaults to 3 (locked). Drive 6 transient (timeout) requeues — well past the cap.
 	for i := 0; i < 6; i++ {

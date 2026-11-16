@@ -61,6 +61,11 @@ import (
 // BackoffSchedule.backoffForAttempt). assigned_box_id/assigned_account_id are left as-is so routing
 // re-picks freely on the next dispatch. Returns 1 if reclaimed, 0 if skipped/no-op (row locked by a
 // worker, or already left in-flight — a clean idempotent no-op, retried next tick).
+//
+// Since send_managed_0028 "queued" is the usual destination, not the only one: reclaiming a job that was
+// SENDING counts as a failed SMTP attempt and can end it as failed/attempts_exhausted (attempts_cap.go),
+// and the cancel guard trigger returns a job of a cancelled campaign as `cancelled`. Both are decided in
+// the one UPDATE below, under the same locks and the same state guard.
 func reclaimJobLocked(ctx context.Context, tx pgx.Tx, cfg Config, jobID, reason string) (int, error) {
 	ladder := cfg.Backoff.LadderSeconds
 	if len(ladder) == 0 {
@@ -102,11 +107,29 @@ func reclaimJobLocked(ctx context.Context, tx pgx.Tx, cfg Config, jobID, reason 
 	}
 
 	// (4) Apply the §2.4 transition on the locked row.
+	//
+	// THE ATTEMPT CAP (send_managed_0028, M2-G2). A reclaim of a job that was SENDING is a real failed
+	// attempt — the lease or the worker's heartbeat timed out with no outcome — so it counts toward
+	// job_max_failed_attempts and stamps first_failed_at, and it can end the job as failed /
+	// attempts_exhausted exactly as a worker-reported failure does (attempts_cap.go). A reclaim of a job
+	// that was only ASSIGNED (a Control crash between the claim and the push, or a claim whose push never
+	// happened) never reached a worker, let alone SMTP: it is a "waiting" requeue and counts for nothing,
+	// which is the same line the dispatcher-side requeues stay on. Every right-hand side below sees the
+	// row as it was BEFORE this UPDATE, so `state = 'sending'` is the state the job was in when it was
+	// reclaimed.
+	//
+	// The cancel guard trigger (send_managed_0028) applies here too: reclaiming a job whose campaign was
+	// cancelled while it was in flight returns it as `cancelled`, not `queued`.
+	exhausted := attemptsExhaustedSQL("state = 'sending'", 5, 6)
 	tag, err := tx.Exec(ctx, `
 UPDATE send_managed.jobs
-   SET state            = 'queued',
+   SET state            = CASE WHEN `+exhausted+` THEN 'failed'::send_managed.job_state ELSE 'queued'::send_managed.job_state END,
+       completed_at     = CASE WHEN `+exhausted+` THEN NOW() ELSE NULL END,
+       terminal_reason  = CASE WHEN `+exhausted+` THEN 'attempts_exhausted' ELSE NULL END,
        lease_expires_at = NULL,
        attempt_count    = LEAST(attempt_count + 1, max_attempts),
+       failed_attempt_count = failed_attempt_count + CASE WHEN state = 'sending' THEN 1 ELSE 0 END,
+       first_failed_at  = CASE WHEN state = 'sending' THEN COALESCE(first_failed_at, NOW()) ELSE first_failed_at END,
        last_error_class = 'timeout',
        last_error_message = $2,
        next_attempt_at  = NOW() + make_interval(secs => LEAST(
@@ -114,7 +137,8 @@ UPDATE send_managed.jobs
            $4::int)),
        updated_at       = NOW()
  WHERE id = $1
-   AND state IN ('assigned','sending')`, jobID, truncate(reason, 2000), ladder, maxSecs)
+   AND state IN ('assigned','sending')`, jobID, truncate(reason, 2000), ladder, maxSecs,
+		cfg.JobMaxFailedAttempts, cfg.JobFailedMaxAgeSec)
 	if err != nil {
 		return 0, err
 	}

@@ -22,20 +22,25 @@ type poolResource struct {
 	AccountCount    int     `json:"account_count"`
 	CreatedAt       string  `json:"created_at"`
 	UpdatedAt       string  `json:"updated_at"`
+
+	// cursorTS: created_at at full microsecond precision for the keyset cursor only (never serialized) —
+	// see account_store.go's accountResource.cursorTS.
+	cursorTS string `json:"-"`
 }
 
 const poolSelectCols = `p.id, p.user_id, p.kind, p.owner_user_id, p.name, p.routing_strategy,
 	p.fallback_pool_id, p.enabled,
 	(SELECT count(*) FROM send_managed.accounts a WHERE a.pool_id = p.id) AS account_count,
 	to_char(p.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-	to_char(p.updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')`
+	to_char(p.updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+	to_char(p.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
 
 var errPoolNotFound = errors.New("pool not found")
 
 func scanPool(row pgx.Row) (*poolResource, error) {
 	var p poolResource
 	if err := row.Scan(&p.ID, &p.UserID, &p.Kind, &p.OwnerUserID, &p.Name, &p.RoutingStrategy,
-		&p.FallbackPoolID, &p.Enabled, &p.AccountCount, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		&p.FallbackPoolID, &p.Enabled, &p.AccountCount, &p.CreatedAt, &p.UpdatedAt, &p.cursorTS); err != nil {
 		return nil, err
 	}
 	return &p, nil

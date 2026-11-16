@@ -1017,7 +1017,7 @@ Read these first; they will each cost you an hour otherwise.
 3. `docker compose ... ps -a` — confirm every container is up and **nothing has exited**. Use `-a`: a plain `ps` omits exited containers, which is exactly how a dead worker hides.
 4. Confirm both workers registered: `SELECT id, status FROM send_managed.boxes` shows **two** `active` rows, and the Control logged `worker registered id=...` exactly twice with no `stream closed` churn
 5. Open the Mailpit UI; confirm it is reachable and empty
-6. Connect with `psql`; confirm the `send_managed` schema exists (owner `send_managed_owner`) and `send_managed.config` holds **57** rows
+6. Connect with `psql`; confirm the `send_managed` schema exists (owner `send_managed_owner`) and `send_managed.config` holds **59** rows
 
 **Pass:** every container up and stable, both workers `active`, Mailpit empty, schema present.
 
@@ -1195,7 +1195,7 @@ Do this by hand through the API, not through a script. You are testing whether t
 
 #### Stage 6 — Config surface and invariants
 
-1. Read all **57** config keys
+1. Read all **59** config keys
 2. Change one with an observable effect (the pacing delay is easiest to see)
    - **Pass:** takes effect without a redeploy
 3. `PUT` `smtp_operation_timeout_sec` **higher** than `job_max_processing_time_sec`

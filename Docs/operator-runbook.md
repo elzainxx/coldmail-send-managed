@@ -59,6 +59,7 @@ If `/readyz` is clean, the health snapshot tells you which tree to open:
 |---|---|
 | `queue.queued` is large and `dispatch.sends_last_window` is 0 | [Everything is queued and nothing is sending](#everything-is-queued-and-nothing-is-sending) |
 | `queue.waiting_for_capacity` > 0, or a pool with `"headroom":"exhausted"` | [Pool exhausted / waiting for capacity](#pool-exhausted--waiting-for-capacity) |
+| `queue.failed` is growing | [A job ended `failed`: which reason?](#a-job-ended-failed-which-reason) |
 | `accounts.quarantined` > 0 | [An account got quarantined](#an-account-got-quarantined) |
 | `workers.stale` > 0, or `boxes.active` is 0 | [A worker died](#a-worker-died) |
 | `active_conditions[]` is non-empty | [Alert conditions](#alert-conditions--triage) |
@@ -644,9 +645,11 @@ eligible account**. It is a *capacity* signal, not a fault, and the distinction 
 - These jobs are **not failed**. They read to the platform as clean pending `state: "queued"`, and
   they will send as soon as capacity returns — even if that is after tomorrow's daily reset.
 - They are **not lost**, **not stuck**, and require no repair. Nothing needs to be requeued.
-- The internal reason (which pool, which accounts, why) is never surfaced to the platform. That is
-  the two-vocabulary rule, not an oversight — if you need the reason, it is in your hands via the
-  queries below, not in the tenant's API response.
+- The *detail* (which pool, which accounts, why) is never surfaced to the platform. That is the
+  two-vocabulary rule, not an oversight — if you need it, it is in your hands via the queries below,
+  not in the tenant's API response. What the platform DOES see, since `send_managed_0028`, is a
+  one-word `reason` on every item: a waiting item reads `reason: "waiting_for_capacity"` (or
+  `dispatch_paused` while a rung is pulled), a pool-exhaustion failure reads `pool_exhausted`.
 
 The system fails a job on exhaustion **only** when the tenant's resolved pool chain is non-empty and
 *every* account in it is blocked in a way that cannot self-recover (quarantined, disabled, or
@@ -698,6 +701,43 @@ in V1 (registered in [`future-work.md`](./future-work.md)). If a dedicated tenan
 
 ---
 
+## A job ended `failed`: which reason?
+
+`failed` has **two writers** since `send_managed_0028`, and they mean different things to you. The platform
+sees which one in the item's `reason` (`GET /v1/report`); you read it on the row.
+
+```bash
+# jobs.terminal_reason is the authoritative record (a `failed` row from before 0028 has NULL and was pool exhaustion).
+psql "$DSN" -c "SELECT terminal_reason, count(*) FROM send_managed.jobs WHERE state='failed' GROUP BY 1"
+```
+
+| `terminal_reason` | What happened | What to do |
+|---|---|---|
+| `pool_exhausted` | The tenant's pool chain was non-empty and every account in it was blocked in a way that cannot self-recover (quarantined, disabled, manually paused). **No SMTP attempt was made.** | Fix the pool — [Pool exhausted / waiting for capacity](#pool-exhausted--waiting-for-capacity). |
+| `attempts_exhausted` | The job **reached the attempt cap**: `job_max_failed_attempts` (default 6) real failed SMTP attempts, or a further failure more than `job_failed_max_age_sec` (default 86400) after its first. The **message never reached the world**; the platform does not charge for it. | Read the job's last `error_class` and its `job_events` rows (`error_message` carries the SMTP text, internal only). A persistent `unknown` (a 554 / policy block) is a **recipient- or content-side** problem, not a capacity one; a persistent `auth_failure` is a dead credential the account effect should already have quarantined. |
+
+```bash
+# why did THIS job end? The failed attempts, in order, with the class and the (internal) SMTP text:
+psql "$DSN" -c "SELECT seq, from_state, to_state, actor, error_class, left(error_message,120) FROM send_managed.job_events WHERE job_id='<id>' ORDER BY seq"
+psql "$DSN" -c "SELECT failed_attempt_count, first_failed_at, last_error_class, terminal_reason FROM send_managed.jobs WHERE id='<id>'"
+```
+
+What does **not** count toward the cap — and so can never cause `attempts_exhausted` however long it lasts —
+is anything that did not reach SMTP: no eligible account, no connected worker, a failed push to the worker,
+the header-injection guard, and the reclaim of a job that was only `assigned`. Those items stay `queued`
+(`reason: waiting_for_capacity` / `no_eligible_account`), by design. **A job that is merely waiting is never
+failed by age**: the age cap is evaluated only when a failed attempt is recorded. To effectively disable the
+cap, raise both dials (`1000` and `2592000`); to tighten it, lower them — a change applies to the next failed
+attempt, with no restart.
+
+Also new on this surface: `queue.cancelled` in `GET /v1/admin/health` counts items the platform stopped with
+`POST /v1/cancel`. They are terminal, never sent, never charged. An item that was **in flight** when its
+campaign was cancelled finishes and reports normally; if its attempt fails it ends `cancelled` rather than
+being retried. Nothing for an operator to repair — it is the platform's decision, recorded as one `job_events`
+row per item.
+
+---
+
 ## A worker died
 
 ### What recovers automatically — usually everything
@@ -715,8 +755,13 @@ happening on its own:
 - **The account is deliberately untouched.** A reclaim is a Control-*declared* timeout with no send
   outcome to attribute, so it never penalizes the account's score or flags. A worker outage does not
   damage your accounts.
-- **No job fails from repeated reclaims.** A job that is reclaimed over and over does not fail by
-  attempt count; it fails only on true pool exhaustion.
+- **Repeated reclaims DO end a job — by the attempt cap, not silently.** The reclaim of a job that was
+  `sending` counts as a failed SMTP attempt (`failed_attempt_count`); after `job_max_failed_attempts`
+  (default 6) of them — or once its first failed attempt is `job_failed_max_age_sec` (default 86400) old —
+  the job is moved to `failed` with reason `attempts_exhausted` instead of being requeued again
+  (`Docs/config-reference.md`, "The attempt cap"). The reclaim of a job that was only `assigned`
+  (claimed, never pushed) counts for nothing. A worker outage that lasts a few reclaim cycles therefore
+  cannot fail a job on its own at the defaults; a worker that keeps dying with the *same* job in flight can.
 - **Buffered outcome replay.** A worker that loses only its *connection* (not its process) keeps its
   unacked outcomes in an in-memory buffer, reconnects, and replays them. The Control persists each
   one idempotently and only *then* acks, so a replay is never a double-send. `provider_message_id`

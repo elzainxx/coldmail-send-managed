@@ -108,6 +108,14 @@ type Config struct {
 	VariationCommentIntensityRates    IntensityRates // variation_comment_intensity_rates — S11 (§2.4)
 	VariationZeroWidthRatePct         int            // variation_zero_width_rate_pct — S11 (§2.4)
 	VariationCSSMicroParams           CSSMicroParams // variation_css_micro_params — S11 (§2.4)
+
+	// The attempt cap (send_managed_0028, M2-G2). A job is moved to the terminal state `failed` with
+	// reason attempts_exhausted when it records its JobMaxFailedAttempts-th FAILED SMTP attempt, or when a
+	// further failed attempt is recorded and the job's first failed attempt is at least
+	// JobFailedMaxAgeSec old. Both count real failed SMTP attempts only — never a dispatcher-side requeue
+	// that did not reach SMTP. Consumed by attempts_cap.go (the predicate), outcome.go and reclaim.go.
+	JobMaxFailedAttempts int // job_max_failed_attempts — failed SMTP attempts before attempts_exhausted (default 6)
+	JobFailedMaxAgeSec   int // job_failed_max_age_sec — max age (s) from the first failed attempt (default 86400)
 }
 
 // IntensityRates is the §2.4 S11 inner shape of variation_comment_intensity_rates: percent (0-100)
@@ -369,6 +377,25 @@ func LoadConfig(ctx context.Context, db *pgxpool.Pool) (Config, error) {
 		return c, err
 	}
 	c.VariationCSSMicroParams = readCSSMicroParams(ctx, db)
+
+	// send_managed_0028's two attempt-cap dials. A missing row is a hard error like every other dial. A
+	// value below 1 is REJECTED as a config fault (Rule 1: never clamp, never auto-correct): a cap of 0
+	// would make `failed_attempt_count + 1 >= cap` true for every job, failing every job on its FIRST
+	// failed attempt, which no operator who typed it meant. The admin PUT validator refuses it too
+	// (adminapi/config_validate.go); this is the backstop for a direct SQL write, and it reports as a
+	// config fault (not a DB outage) like every other unusable value.
+	if c.JobMaxFailedAttempts, err = readIntKey(ctx, db, "job_max_failed_attempts"); err != nil {
+		return c, err
+	}
+	if c.JobMaxFailedAttempts < 1 {
+		return c, badConfigValue("job_max_failed_attempts", `an integer >= 1 {"v":N}`)
+	}
+	if c.JobFailedMaxAgeSec, err = readIntKey(ctx, db, "job_failed_max_age_sec"); err != nil {
+		return c, err
+	}
+	if c.JobFailedMaxAgeSec < 1 {
+		return c, badConfigValue("job_failed_max_age_sec", `an integer >= 1 {"v":N}`)
+	}
 
 	// Config-ordering INVARIANT (CLAUDE.md Rule 1, Phase 6 P6-11): the worker's per-operation SMTP
 	// timeout MUST be strictly shorter than the job lease, so a genuinely account-caused hang

@@ -112,11 +112,18 @@ func (s *Server) handleAccountList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The cursor is built from the LAST RETURNED item (items[limit-1]) — never from the extra (limit+1)th
+	// row, which only tells us there IS another page — and from its sort key at FULL precision
+	// (cursorTS), not from the second-truncated created_at the resource serializes. A cursor carrying
+	// "…:05Z" for a row created at …:05.347 compares as EARLIER than that row, so the keyset predicate
+	// `(created_at, id) > (cursor)` re-admits it and every row of that second already served: duplicates on
+	// the next page, and — when a second holds more than `limit` rows — the same page forever. The
+	// keyset's own listing tests (listing_cursor_test.go) pin both halves.
 	var nextCursor *string
 	if len(items) > limit {
 		last := items[limit-1]
 		items = items[:limit]
-		c := encodeCursor(last.CreatedAt, last.ID)
+		c := encodeCursor(last.cursorTS, last.ID)
 		nextCursor = &c
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor})

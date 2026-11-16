@@ -54,6 +54,14 @@ func (e *testEnv) seedEligibleAccount(t *testing.T, poolID string) string {
 // transition, exactly the shape the dispatcher/box/outcome-handler produce, not a shortcut).
 func (e *testEnv) campaignJobRow(t *testing.T, campaignID, userID, state string) {
 	t.Helper()
+	e.seedCampaignJob(t, campaignID, userID, state)
+}
+
+// seedCampaignJob is campaignJobRow returning the (jobID, jobItemID) it created, for tests that go on to
+// read or mutate that one row. It also accepts the terminal state `cancelled` (send_managed_0027), which —
+// like sent/failed/bounced — must carry completed_at (jobs_completed_at_valid_check, widened by 0028).
+func (e *testEnv) seedCampaignJob(t *testing.T, campaignID, userID, state string) (string, string) {
+	t.Helper()
 	itemID := e.seedJobItemCampaign(t, campaignID, userID, "camprep-"+randHex(6)+"@example.com")
 
 	tx, err := e.admin.Begin(bgctx())
@@ -75,7 +83,7 @@ func (e *testEnv) campaignJobRow(t *testing.T, campaignID, userID, state string)
 		t.Fatalf("commit genesis: %v", err)
 	}
 	if state == "queued" {
-		return
+		return jobID, itemID
 	}
 
 	// jobs_lease_valid_check requires lease_expires_at for assigned/sending; jobs_completed_at_
@@ -88,7 +96,7 @@ func (e *testEnv) campaignJobRow(t *testing.T, campaignID, userID, state string)
 	case "sent", "bounced":
 		completedExpr = "NOW()"
 		pmidExpr = "gen_random_uuid()::text"
-	case "failed":
+	case "failed", "cancelled":
 		completedExpr = "NOW()"
 	}
 	if leaseExpr == "" {
@@ -103,6 +111,7 @@ func (e *testEnv) campaignJobRow(t *testing.T, campaignID, userID, state string)
 	e.actorExec(t, "dispatcher",
 		`UPDATE send_managed.jobs SET state=$1, lease_expires_at=`+leaseExpr+`, completed_at=`+completedExpr+`, provider_message_id=`+pmidExpr+` WHERE id=$2`,
 		state, jobID)
+	return jobID, itemID
 }
 
 // TestCampaignReport_TotalsAndProgress — a mixed campaign (sent/bounced/failed/in-flight/pending)

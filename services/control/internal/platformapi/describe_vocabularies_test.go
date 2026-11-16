@@ -121,8 +121,9 @@ func TestDescribeVocabularies_EveryPublishedValueSetMatchesTheLiveType(t *testin
 // exposedDBEnums" would be indistinguishable from "nobody looked", and item 8's whole point would be
 // defeated one level up in the mechanism meant to enforce it.
 //
-// This control carries more weight in THIS module than in module 3: five of seven enums are excluded
-// here, so the exclusion list is the bulk of the accounting rather than a footnote on it.
+// This control carries more weight in THIS module than in module 3: four of seven enums are excluded
+// here (error_class was the fifth until M2-G1 published it), so the exclusion list is the bulk of the
+// accounting rather than a footnote on it.
 func TestDescribeVocabularies_EverySchemaEnumIsAccountedFor(t *testing.T) {
 	e := newTestEnv(t, "descvocabcover")
 	live := e.liveEnumLabels(t)
@@ -168,6 +169,64 @@ func TestDescribeVocabularies_EverySchemaEnumIsAccountedFor(t *testing.T) {
 	for typname := range notExposedDBEnums {
 		if _, present := vocabs[typname]; present {
 			t.Fatalf("send_managed.%s is declared NOT exposed but appears in describe.vocabularies", typname)
+		}
+	}
+}
+
+// TestDescribeVocabularies_ErrorClassAndItemReasonArePublished — M2-G1. The report's items now carry
+// `error_class` and `reason`, so both value sets a client branches on must be published: error_class as a
+// LIVE db_enum (it used to be the one enum deliberately excluded, "report publishes clean external state
+// only"), item_reason as a module_constant. Each is checked against an INDEPENDENT source — the live catalog
+// and the Go declaration — and against the exclusion map, which must no longer name error_class.
+func TestDescribeVocabularies_ErrorClassAndItemReasonArePublished(t *testing.T) {
+	e := newTestEnv(t, "descvocabreason")
+	vocabs := e.describeVocabularies(t)
+
+	ec, ok := vocabs["error_class"].(map[string]any)
+	if !ok {
+		t.Fatalf("describe.vocabularies has no error_class — the report carries it now, so a client cannot branch on it without it being published: %v", vocabs)
+	}
+	if src, _ := ec["source"].(string); src != "db_enum" {
+		t.Fatalf("error_class source = %q, want db_enum (read live from pg_enum)", src)
+	}
+	got := stringSliceOf(t, ec["values"])
+	wantLive := e.liveEnumLabels(t)["error_class"]
+	if len(wantLive) != 6 {
+		t.Fatalf("the live error_class type has %d labels (%v), want the six locked values — vacuity guard", len(wantLive), wantLive)
+	}
+	if strings.Join(got, ",") != strings.Join(wantLive, ",") {
+		t.Fatalf("error_class published %v, live type has %v", got, wantLive)
+	}
+	for _, f := range stringSliceOf(t, ec["fields"]) {
+		if !strings.HasSuffix(f, ".error_class") {
+			t.Fatalf("error_class declares field path %q, want report paths ending .error_class", f)
+		}
+	}
+	if _, stillExcluded := notExposedDBEnums["error_class"]; stillExcluded {
+		t.Fatal("error_class is published AND still named in notExposedDBEnums — the accounting must be unambiguous")
+	}
+
+	ir, ok := vocabs["item_reason"].(map[string]any)
+	if !ok {
+		t.Fatalf("describe.vocabularies has no item_reason: %v", vocabs)
+	}
+	if src, _ := ir["source"].(string); src != "module_constant" {
+		t.Fatalf("item_reason source = %q, want module_constant", src)
+	}
+	reasons := stringSliceOf(t, ir["values"])
+	if strings.Join(reasons, ",") != strings.Join(itemReasons, ",") {
+		t.Fatalf("item_reason published %v, the declaration says %v", reasons, itemReasons)
+	}
+	// The terminal reasons the caller settles money on must all be there.
+	for _, must := range []string{"pool_exhausted", "attempts_exhausted", "bounce_permanent", "cancelled"} {
+		found := false
+		for _, r := range reasons {
+			if r == must {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("item_reason does not publish %q: %v", must, reasons)
 		}
 	}
 }

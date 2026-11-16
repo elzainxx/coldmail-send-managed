@@ -356,24 +356,52 @@ func (h *OutcomeHandler) applyClassifiedFailure(ctx context.Context, workerID st
 		// attempt_count at max_attempts (§6.2): once at the cap it STAYS there, so the locked
 		// jobs_attempt_count_check (attempt_count <= max_attempts) can never abort — no 23514 ever,
 		// for any job lifetime. next_attempt_at uses the post-increment attempt as the backoff index.
+		//
+		// THE ATTEMPT CAP (send_managed_0028, M2-G2) is decided in this SAME statement. This failure is a
+		// real failed SMTP attempt, so it bumps failed_attempt_count / stamps first_failed_at (attempt_count
+		// cannot do this job: it saturates at max_attempts and is also bumped by dispatcher-side requeues
+		// that never reached SMTP), and if it is the job_max_failed_attempts-th — or the job's first failure
+		// is at least job_failed_max_age_sec old — the row goes to the terminal `failed` instead of back to
+		// `queued`, with completed_at and terminal_reason='attempts_exhausted'. See attempts_cap.go for the
+		// predicate and why it is one expression. The state guard (`state='sending'` + the attempt-token
+		// guard) is the one this path always had, so a duplicate or stale report still matches no row.
+		//
+		// RETURNING the resulting state, not the one we asked for: the cancel guard trigger
+		// (send_managed_0028) may turn a `queued` into `cancelled` for a job whose campaign was cancelled while
+		// this attempt was in flight, and the log line below must say what actually happened.
+		exhausted := attemptsExhaustedSQL("TRUE", 6, 7)
 		nextSecs := h.backoffSecondsForClass(class, saturatingAttempt(ctx, tx, rep.JobID), cfg)
-		tag, err := tx.Exec(ctx,
+		var resultState string
+		err := tx.QueryRow(ctx,
 			`UPDATE send_managed.jobs
-			   SET state='queued',
+			   SET state = CASE WHEN `+exhausted+` THEN 'failed'::send_managed.job_state ELSE 'queued'::send_managed.job_state END,
+			       completed_at = CASE WHEN `+exhausted+` THEN NOW() ELSE NULL END,
+			       terminal_reason = CASE WHEN `+exhausted+` THEN 'attempts_exhausted' ELSE NULL END,
 			       lease_expires_at=NULL,
 			       last_error_class=$3,
 			       last_error_message=$2,
 			       attempt_count = LEAST(attempt_count + 1, max_attempts),
+			       failed_attempt_count = failed_attempt_count + 1,
+			       first_failed_at = COALESCE(first_failed_at, NOW()),
 			       next_attempt_at = NOW() + make_interval(secs => $4),
 			       updated_at=NOW()
 			 WHERE id=$1 AND state='sending'
-			   AND ($5 = 0 OR attempt_token = 0 OR attempt_token = $5)`,
-			rep.JobID, truncate(detail, 2000), class, nextSecs, rep.AttemptToken)
+			   AND ($5 = 0 OR attempt_token = 0 OR attempt_token = $5)
+			 RETURNING state::text`,
+			rep.JobID, truncate(detail, 2000), class, nextSecs, rep.AttemptToken,
+			cfg.JobMaxFailedAttempts, cfg.JobFailedMaxAgeSec).Scan(&resultState)
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errNoop
+			}
 			return err
 		}
-		if tag.RowsAffected() == 0 {
-			return errNoop
+		switch resultState {
+		case "failed":
+			log.Printf("outcome: job %s reached the attempt cap (job_max_failed_attempts=%d, job_failed_max_age_sec=%d) on a %s failure — moved to failed/attempts_exhausted; the message never reached the world, so it is not chargeable",
+				rep.JobID, cfg.JobMaxFailedAttempts, cfg.JobFailedMaxAgeSec, class)
+		case "cancelled":
+			log.Printf("outcome: job %s failed (%s) while its campaign was cancelled — not requeued, moved to cancelled", rep.JobID, class)
 		}
 
 		// (2) Account effect + score recompute on the one account this attempt used.

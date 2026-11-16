@@ -99,7 +99,7 @@ func TestRunnerLifecycle(t *testing.T) {
 	// the migration chain — it grows as later phases add 0015+.
 	wantChain := []string{"0000", "0001", "0002", "0003", "0004", "0005", "0006", "0007",
 		"0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019",
-		"0020", "0021", "0022", "0023", "0024", "0025", "0026"}
+		"0020", "0021", "0022", "0023", "0024", "0025", "0026", "0027", "0028"}
 
 	// --- Apply ---
 	if err := r.Up(ctx); err != nil {
@@ -139,9 +139,12 @@ func TestRunnerLifecycle(t *testing.T) {
 	// off|shadow|enforce ladder extended to the two remaining undialled autonomous mutators; ADR-0014) = 57.
 	// Phase 4 added NO config key (§0); Phase 7, Phase 9.5, send_managed_0023, send_managed_0025 and
 	// send_managed_0026 are fully schema-neutral (config seeds only, no table).
-	if n := configKeyCount(t, admin); n != 57 {
-		t.Fatalf("after Up: send_managed.config has %d keys, want 57 (14 foundation + 3 Phase 5 + 2 Phase 6 + 6 Phase 7 + 17 Phase 8 + 11 Phase 9.5 + 1 send_managed_0023 + 1 send_managed_0025 + 2 send_managed_0026)", n)
+	// PLUS TWO at send_managed_0028 (job_max_failed_attempts, job_failed_max_age_sec — the attempt cap, M2-G2) = 59.
+	if n := configKeyCount(t, admin); n != 59 {
+		t.Fatalf("after Up: send_managed.config has %d keys, want 59 (14 foundation + 3 Phase 5 + 2 Phase 6 + 6 Phase 7 + 17 Phase 8 + 11 Phase 9.5 + 1 send_managed_0023 + 1 send_managed_0025 + 2 send_managed_0026 + 2 send_managed_0028)", n)
 	}
+	// send_managed_0027 / 0028 (M2-G2, M2-G3, M2-G1): the cancelled state, the attempt cap, the cancel guard.
+	assertCancelAndAttemptCapMigrations(t, admin)
 	// Phase 8 Chunk 5's seventeen content-variation config seeds — anti-vacuity that they landed
 	// (amended from fourteen, P8-OD-1 RULED-WIDEN: css_magnitude_px/zero_width_rate/user_agent_rate).
 	for _, key := range []string{
@@ -364,6 +367,36 @@ func TestRunnerLifecycle(t *testing.T) {
 			}
 			if !configKeyExists(t, admin, "dispatch_enabled") {
 				t.Fatal("after Down 0025: dispatch_enabled is GONE — 0025's down must remove exactly its own row; sweeping up the retained boolean leaves a reverted system with no dispatch kill-switch at all")
+			}
+		}
+		// 0028's down (the attempt cap + cancel guard) and 0027's (a documented forward-only no-op). Checked
+		// in the order the loop meets them: 0028 first, with the enum value STILL present, then 0027.
+		if v == "0028" {
+			for _, col := range []string{"failed_attempt_count", "first_failed_at", "cancel_requested_at", "terminal_reason"} {
+				if columnExists(t, admin, "jobs", col) {
+					t.Fatalf("after Down 0028: send_managed.jobs.%s is still present (down did not drop it)", col)
+				}
+			}
+			for _, key := range []string{"job_max_failed_attempts", "job_failed_max_age_sec"} {
+				if configKeyExists(t, admin, key) {
+					t.Fatalf("after Down 0028: send_managed.config still has %q (down did not delete its seeded row)", key)
+				}
+			}
+			if functionExists(t, admin, "fn_jobs_cancel_guard") || triggerExists(t, admin, "trg_jobs_cancel_guard") {
+				t.Fatal("after Down 0028: the cancel guard trigger/function is still present (down did not drop it)")
+			}
+			// The ORIGINAL terminal-state CHECK is back — it no longer knows `cancelled`.
+			if def := constraintDef(t, admin, "jobs", "jobs_completed_at_valid_check"); strings.Contains(def, "cancelled") {
+				t.Fatalf("after Down 0028: jobs_completed_at_valid_check still names cancelled (down did not restore send_managed_0007's CHECK): %s", def)
+			}
+			// ...and the enum value is deliberately NOT removed (Postgres cannot; the enum is additive-only).
+			if labels := enumLabels(t, admin, "job_state"); labels[len(labels)-1] != "cancelled" {
+				t.Fatalf("after Down 0028: job_state labels = %v, want cancelled still last (0028's down must not touch the enum)", labels)
+			}
+		}
+		if v == "0027" {
+			if labels := enumLabels(t, admin, "job_state"); labels[len(labels)-1] != "cancelled" {
+				t.Fatalf("after Down 0027: job_state labels = %v — the down is a DOCUMENTED forward-only no-op and the label must remain (an enum value cannot be dropped); a down that claims otherwise is lying", labels)
 			}
 		}
 		// 0026's down, same shape and the same two halves. Note the DIRECTION this revert moves safety in,

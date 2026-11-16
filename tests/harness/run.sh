@@ -8,6 +8,7 @@
 #   3. worker<->Control mTLS register/heartbeat + wrong-token negative control (live Control)
 #   4. two-Control singleton        (real 2nd Control process exits, no double-lock)
 #   5. worker-CANNOT-read-KMS        (the worker container cannot read the Control's KMS key)
+#  (…then the Go packages and the live suites 6-11: see the SUITE headers below; SUITE 11 is POST /v1/cancel)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -443,6 +444,16 @@ hr; echo "SUITE 10: Phase 8 content variation — LIVE end-to-end (real worker +
 # with variation ON. Reuses phase3_send.sh's pool/account/$SYSUSER fixtures + $CANARY + $DC/$PSQL.
 # shellcheck disable=SC1091
 source tests/harness/phase8_variation.sh
+
+hr; echo "SUITE 11: POST /v1/cancel — LIVE (real worker + real Mailpit; the sink's count stops while the in-flight item finishes)"; hr
+# M2-G3. A campaign of 10 for a fresh tenant is run with the one worker FROZEN (docker pause, the technique the
+# outage drill proved on a real runner) so an item is genuinely in flight; the cancel lands; the worker is
+# released. Asserts: the response partitions the campaign; nothing is left queued; the in-flight item is
+# delivered exactly once; the sink holds one message per sent item and NONE for a cancelled item; the sink's
+# count then stops; a repeat cancel is a no-op; a cancelled job_item can never be re-run; another tenant's cancel
+# is an empty 200. Sourced so it shares PASS/FAIL/ok/bad + $DC/$PSQL/$PLTOK and phase3's pool/account fixtures.
+# shellcheck disable=SC1091
+source tests/harness/phase11_cancel.sh
 
 hr
 echo "HARNESS RESULT: $PASS passed, $FAIL failed"

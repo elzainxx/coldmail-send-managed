@@ -540,14 +540,20 @@ var autonomousWriteExclusions = map[string]string{
 	"dispatch.go": "claim/lease/push writes are governed by dispatch_mode's four-rung ladder " +
 		"(send_managed_0025, fix-plan item 12) plus dispatch_enabled — already dialled, on the ladder that " +
 		"suits a kill-switch rather than a mutator.",
-	"loop.go":    "the claim UPDATE; same ladder as dispatch.go (dispatch_mode).",
-	"reclaim.go": "reclaim/lease-expiry writes are gated by dispatch_mode; the `stopped` rung freezes the sweep.",
+	"loop.go": "the claim UPDATE; same ladder as dispatch.go (dispatch_mode).",
+	"reclaim.go": "reclaim/lease-expiry writes are gated by dispatch_mode; the `stopped` rung freezes the sweep. " +
+		"Since send_managed_0028 the same UPDATE can end a job as failed/attempts_exhausted when the reclaim of a " +
+		"SENDING job reaches the attempt cap — governed by the two numeric dials job_max_failed_attempts / " +
+		"job_failed_max_age_sec (the cap is enforcing by the owner's ruling, not a shadow ladder).",
 	"rescan.go": "startup rescan re-adopts in-flight work after a restart. A RECOVERY path, not a policy " +
 		"decision: it writes what the previous process already decided, and shadowing it would strand live " +
 		"jobs on every deploy. Gated by dispatch_mode like the rest of the claim path.",
 	"outcome.go": "records what a worker REPORTED — never autonomous. The Control is transcribing an " +
 		"external event, and item 12 established that outcome ingestion is never gated at any rung because " +
-		"refusing it destroys evidence rather than preventing an action.",
+		"refusing it destroys evidence rather than preventing an action. Since send_managed_0028 the SAME " +
+		"transcription can end a job as failed/attempts_exhausted when the failure it records is the Nth " +
+		"(job_max_failed_attempts) or the job is job_failed_max_age_sec old — a terminal consequence of a real " +
+		"worker report, governed by those two numeric dials rather than by a shadow ladder.",
 	"exhaustion.go": "requeues a job whose pool had no eligible account. A mechanical consequence of the " +
 		"claim path (the job returns to the state it came from), gated by dispatch_mode.",
 }

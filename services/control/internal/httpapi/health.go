@@ -28,7 +28,7 @@ type HealthServer struct {
 
 // NewHealthServer wires the health routes and mounts, when provided:
 //   - adminHandler   under /v1/admin/*   (Domain B operator surface, Phase 2)
-//   - platformHandler for /v1/quote,/v1/run,/v1/report,/v1/describe (Domain A, Phase 3)
+//   - platformHandler for /v1/quote,/v1/run,/v1/report,/v1/describe,/v1/cancel (Domain A, Phase 3 + cancel)
 //
 // Passing nil for either keeps that surface unmounted (fail-closed when its credential is
 // unconfigured). The two handlers own disjoint route sets and carry their own auth.
@@ -42,12 +42,13 @@ func NewHealthServer(addr string, database *db.DB, guard *singleton.Guard, admin
 		mux.Handle("/v1/admin/", adminHandler)
 	}
 	if platformHandler != nil {
-		// The platform server owns exactly /v1/quote,/v1/run,/v1/report,/v1/describe (Domain A).
+		// The platform server owns exactly /v1/quote,/v1/run,/v1/report,/v1/describe,/v1/cancel (Domain A).
 		// Register each explicitly so the mux does not shadow /v1/admin/*.
 		mux.Handle("/v1/quote", platformHandler)
 		mux.Handle("/v1/run", platformHandler)
 		mux.Handle("/v1/report", platformHandler)
 		mux.Handle("/v1/describe", platformHandler)
+		mux.Handle("/v1/cancel", platformHandler)
 	}
 	// Catch-all: anything this mux does not route (an unknown path, or a known path when its surface
 	// is unmounted) answers the CODED envelope rather than ServeMux's `404 page not found` text

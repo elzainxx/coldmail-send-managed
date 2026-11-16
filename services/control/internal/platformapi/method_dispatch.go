@@ -158,8 +158,11 @@ func apiVersionOf(rs []route) string {
 	return version
 }
 
-// platformRoutes is the four Phase-3 platform routes. Additive-only; the served set must match
-// Docs/api-contract.md (the contract_drift gate).
+// platformRoutes is the five platform routes: the four Phase-3 routes plus POST /v1/cancel (M2-G3).
+// Additive-only; the served set must match Docs/api-contract.md (the contract_drift gate) AND the exact
+// paths httpapi's root mux mounts for this surface (httpapi/health.go registers each one explicitly so
+// the mux does not shadow /v1/admin/*) — a route added here and not there answers the root mux's coded
+// 404, which is why contract_drift probes every entry of this table on the wire.
 //
 // The "/v1" in each pattern is what APIVersion() reads, so these strings are the single source of
 // this module's contract version — describe does not carry a second copy.
@@ -169,6 +172,7 @@ func (s *Server) platformRoutes() []route {
 		{"POST", "/v1/run", s.handleRun},
 		{"GET", "/v1/report", s.handleReport},
 		{"GET", "/v1/describe", s.handleDescribe},
+		{"POST", "/v1/cancel", s.handleCancel},
 	}
 }
 

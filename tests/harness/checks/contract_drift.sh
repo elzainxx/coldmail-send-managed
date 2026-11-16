@@ -176,7 +176,7 @@ pf() { curl -s -o /dev/null -w '%{http_code}' -X "$1" "http://localhost:8080$2" 
 pf_probe="$(pf POST /v1/run)"
 if [[ "$pf_probe" == "401" ]]; then
   declare -A PLATFORM_ROUTES=(
-    ["POST /v1/quote"]=1 ["POST /v1/run"]=1 ["GET /v1/report"]=1 ["GET /v1/describe"]=1
+    ["POST /v1/quote"]=1 ["POST /v1/run"]=1 ["GET /v1/report"]=1 ["GET /v1/describe"]=1 ["POST /v1/cancel"]=1
   )
   for spec in "${!PLATFORM_ROUTES[@]}"; do
     m="${spec%% *}"; p="${spec#* }"
@@ -366,7 +366,7 @@ und="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/undocumen
 [[ "$und" == "404" ]] || { echo "contract_drift FAIL: undocumented path did not 404 (got $und) — surface wider than the contract"; fail=1; }
 
 # ...and through the ENVELOPE. This path reaches neither sub-surface: the ROOT mux routes only
-# /healthz, /readyz, the /v1/admin/ prefix and the four exact platform paths, so this is the one
+# /healthz, /readyz, the /v1/admin/ prefix and the five exact platform paths, so this is the one
 # probe that exercises the root mux's own coded fallback (item 7b's third surface). That surface is
 # the widest exposure of the three — it is also what answers a REAL documented path when its
 # credential is unconfigured and the surface therefore does not mount — and until this line nothing
@@ -413,7 +413,7 @@ for r in "/healthz" "/readyz" "/v1/worker/register" "/v1/worker/heartbeat" \
          "/v1/admin/accounts" "/v1/admin/pools" "/v1/admin/config" \
          "/v1/admin/accounts/{id}/quarantine" "/v1/admin/accounts/{id}/unpause" \
          "/v1/admin/accounts/{id}/events" "/v1/admin/health" \
-         "/v1/quote" "/v1/run" "/v1/report" "/v1/describe"; do
+         "/v1/quote" "/v1/run" "/v1/report" "/v1/describe" "/v1/cancel"; do
   grep -q "$r" Docs/api-contract.md || { echo "contract_drift FAIL: $r served but not documented in api-contract.md"; fail=1; }
 done
 

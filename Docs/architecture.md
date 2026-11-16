@@ -72,6 +72,15 @@ The job state machine (`queued → assigned → sending → sent`, plus `sending
 `send_managed_job_lifecycle_states.svg`. Diagnosing where a job is stuck is
 `operator-runbook.md`.
 
+**What the diagram does not show** (it predates `send_managed_0027`/`0028`; ADR-0016): the seventh, terminal
+state **`cancelled`** (`POST /v1/cancel` moves every `queued` item of a campaign there; an item that was
+already in flight finishes, and if its attempt fails it ends `cancelled` instead of returning to `queued`,
+via the `fn_jobs_cancel_guard` trigger), and a second route into `failed` — **`sending → failed`** (or
+`assigned|sending → failed` from the reclaim loop) when a job reaches the **attempt cap**
+(`job_max_failed_attempts` failed SMTP attempts, or `job_failed_max_age_sec` since the first). `failed`
+therefore has two writers; `jobs.terminal_reason` (`pool_exhausted` | `attempts_exhausted`) and the report's
+`reason` say which. Every terminal state sets `completed_at`.
+
 ## Where each guarantee lives
 
 | Guarantee | Enforced by | Where |
@@ -85,7 +94,7 @@ The job state machine (`queued → assigned → sending → sent`, plus `sending
 | Credential never crosses a client boundary | two-vocabulary error rule; `no_secret_leak` CI gate (worker token) + the send-path harness's SMTP-credential canary scan | `internal/adminapi`, CI |
 | Tenant isolation | `user_id` on every table; RLS on all `send_managed.*`; `FORCE ROW LEVEL SECURITY` on `accounts` under the non-login `send_managed_owner` | DB |
 | No deadlock on account/job writes | account → job lock ordering, codebase-wide | CLAUDE.md Rule 9 + ADR-0010 |
-| Every tunable is config, not code | 57 seeded `send_managed.config` keys; `config_drift` + `config_consumption` CI gates | DB + CI |
+| Every tunable is config, not code | 59 seeded `send_managed.config` keys; `config_drift` + `config_consumption` CI gates | DB + CI |
 
 ## Control plane
 

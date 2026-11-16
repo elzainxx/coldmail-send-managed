@@ -2,8 +2,8 @@
 # One key name per line. The CI config_drift gate asserts:
 #   live send_managed.config key set  ==  this manifest  ==  the config-reference.md table.
 # Each config-seeding migration (Phase 1's send_managed_0010 onward) appends its keys here in the
-# SAME change, so the gate grows monotonically. Current total: 57 =
-#   14 (0010) + 3 (0017) + 2 (0018) + 6 (0019) + 17 (0020) + 12 (0021 & 0023) + 1 (0025) + 2 (0026).
+# SAME change, so the gate grows monotonically. Current total: 59 =
+#   14 (0010) + 3 (0017) + 2 (0018) + 6 (0019) + 17 (0020) + 12 (0021 & 0023) + 1 (0025) + 2 (0026) + 2 (0028).
 # Phase 9.5's headline "53 keys" was written down before send_managed_0023 added a twelfth key to that
 # group, which is why 53 + 1 + 2 does not reach 57. THE COUNT IN A COMMENT IS NOT THE GATE: the gate is
 # the diff below against the live key set AND Docs/config-reference.md, all three of which must match
@@ -105,3 +105,11 @@ dispatch_mode
 # two ladders are separate machinery; Docs/config-reference.md carries the operator descriptions.
 autopause_mode
 retention_mode
+
+# M2-G2 (the attempt cap) — send_managed_0028 (+2 keys). Before this, ONE writer produced `failed` (pool
+# exhaustion) and every other SMTP failure that was not a hard bounce requeued without bound, so a
+# persistent 554 or a dead credential never became terminal. These two dials bound it; they count REAL
+# failed SMTP attempts only (never a dispatcher-side requeue that did not reach SMTP). Defaults 6 and 86400.
+# Docs/config-reference.md carries the operator descriptions; internal/dispatch/attempts_cap.go the logic.
+job_max_failed_attempts
+job_failed_max_age_sec

@@ -36,6 +36,11 @@ type accountResource struct {
 	LastFailureAt      *string       `json:"last_failure_at"`
 	CreatedAt          string        `json:"created_at"`
 	UpdatedAt          string        `json:"updated_at"`
+
+	// cursorTS is created_at at FULL (microsecond) precision, for the keyset cursor ONLY — never serialized.
+	// created_at above is rendered to the second (a documented, unchanged contract), and a cursor built from
+	// it truncates the sort key: see handleAccountList.
+	cursorTS string `json:"-"`
 }
 
 // accountSelectCols projects ONLY safe columns. The credential_* columns are deliberately absent
@@ -51,7 +56,8 @@ const accountSelectCols = `a.id, a.user_id, a.pool_id, a.smtp_host, a.smtp_port,
 	to_char(a.last_success_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
 	to_char(a.last_failure_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
 	to_char(a.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-	to_char(a.updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')`
+	to_char(a.updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+	to_char(a.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
 
 var errAccountNotFound = errors.New("account not found")
 
@@ -61,7 +67,7 @@ func scanAccount(row pgx.Row) (*accountResource, error) {
 		&a.FromAddress, &a.FromName, &a.HasCredential,
 		&a.Status.Paused, &a.Status.PauseReason, &a.Status.Quarantined, &a.Status.Disabled,
 		&a.DailyLimit, &a.DailySentCount, &a.DailyResetDay, &a.AccountStatusScore,
-		&a.LastSuccessAt, &a.LastFailureAt, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		&a.LastSuccessAt, &a.LastFailureAt, &a.CreatedAt, &a.UpdatedAt, &a.cursorTS); err != nil {
 		return nil, err
 	}
 	return &a, nil

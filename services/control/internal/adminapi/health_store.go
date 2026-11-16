@@ -419,7 +419,7 @@ FROM send_managed.pools p
 LEFT JOIN send_managed.accounts a ON a.pool_id = p.id
 WHERE p.enabled = TRUE
 GROUP BY p.id, p.kind
-ORDER BY p.created_at`
+ORDER BY p.created_at, p.id`
 	rows, err := db.Query(ctx, q, tz, throttleSec, hour)
 	if err != nil {
 		return nil, err

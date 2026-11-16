@@ -384,10 +384,14 @@ func TestAttemptToken_MarkSendingVsAccountLockNoDeadlock(t *testing.T) {
 		t.Fatal("the outcome handler completed while the job row was held — direction (b) is vacuous")
 	case <-time.After(750 * time.Millisecond):
 	}
+	// The statement being waited on is the outcome handler's failure UPDATE. It used to be recognised by
+	// its text `SET state='queued'`; since send_managed_0028 (the attempt cap) the SAME statement chooses
+	// failed-or-queued in a CASE, so the stable fragment unique to it is the counter it bumps. Scoped to this
+	// clone (datname) AND to that statement (query ILIKE), per CLAUDE.md Rule 10.
 	if err := e.admin.QueryRow(ctx,
 		`SELECT count(*) FROM pg_stat_activity
 		  WHERE datname = current_database() AND wait_event_type='Lock' AND state='active'
-		    AND query ILIKE '%send_managed.jobs%SET state=''queued''%'`).Scan(&blocked); err != nil {
+		    AND query ILIKE '%send_managed.jobs%failed_attempt_count = failed_attempt_count + 1%'`).Scan(&blocked); err != nil {
 		t.Fatalf("read pg_stat_activity: %v", err)
 	}
 	if blocked == 0 {

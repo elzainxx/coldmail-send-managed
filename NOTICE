@@ -1,4 +1,4 @@
-Source visible for transparency. All rights reserved. No license is granted to use, copy, modify or distribute.
+Copyright (c) 2026 Zain. All rights reserved. The source is visible for transparency only. No license is granted to use, copy, modify, distribute or run this software, in whole or in part.
 
 SEND_MANAGED Module — Third-Party Notices
 =========================================
@@ -10,8 +10,9 @@ This repository contains two services and one migration/tooling layer (see READM
   - tools/             — the migration runner (send-managed-migrate), worker provisioner, cert/secret tooling
 
 None of the above is a fork of a third-party project. A sibling module, `coldmail-send-byo` (module 3),
-was forked from THIS repository by the same owner — see the top-level LICENSE's "Scope" section. This
-NOTICE covers third-party components consumed as dependencies, not that relationship.
+was forked from THIS repository by the same owner, at commit `21b65e65eba8f2cc16a84408bac6e018511ec46b`
+(tag `module3-fork-point`). This NOTICE covers third-party components consumed as dependencies, not that
+relationship.
 
 The following third-party components are used, and their licenses are respected.
 
@@ -53,7 +54,8 @@ The following third-party components are used, and their licenses are respected.
 Project's own code
 --------------------------------------------------------------------------------
   The project's own code (services/, tools/, db/migrations/, deploy/, scripts/, tests/, and Docs/)
-  is licensed under the top-level LICENSE file — PROPRIETARY / all-rights-reserved, matching modules 1
-  and 3. This NOTICE records ONLY the third-party components the project must respect; nothing here
-  grants rights over the owner's own code, and nothing in the top-level LICENSE alters or relicenses
-  the third-party terms recorded above.
+  is covered by the top-level LICENSE file: all rights reserved, the source visible for transparency
+  only, no license granted (the same wording in every repository of the project). This NOTICE records
+  ONLY the third-party components the project must respect; nothing here grants rights over the owner's
+  own code, and nothing in the top-level LICENSE alters or relicenses the third-party terms recorded
+  above.

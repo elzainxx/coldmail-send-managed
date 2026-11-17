@@ -1,6 +1,6 @@
 # SendManaged Module
 
-Source visible for transparency. All rights reserved; no license is granted. See [`NOTICE`](./NOTICE).
+Source visible for transparency only; all rights reserved (see LICENSE and NOTICE).
 
 A backend-only email-sending service. A platform hands it a mail list and a template; it handles
 everything else — routing across a pool of SMTP accounts, pacing, retries, error classification,

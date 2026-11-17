@@ -1945,7 +1945,7 @@ The most valuable stage.
      returned to 0/s the moment the replica was removed. Watch the registration *rate*, not the count.
    - **Traps (Windows / Git Bash):** `MSYS_NO_PATHCONV=1` is needed on `docker exec <container> ls /path`
      too, not only on `docker run -v` — without it Git Bash rewrites the **container-side** path and you
-     get `C:/Program Files/Git/secrets/mtls/: No such file or directory`, which reads like a missing
+     get `<Git for Windows install directory>/secrets/mtls/: No such file or directory`, which reads like a missing
      mount. And `grep -P` is unavailable in this locale (`-P supports only unibyte and UTF-8 locales`),
      so parse the provisioner output with `sed`/`awk`.
 4. **Remove a worker** — stop it cleanly

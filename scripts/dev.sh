@@ -24,6 +24,15 @@ fi
 
 cmd="${1:-help}"
 
+# ci_mask <value> — on a GitHub Actions runner, register a run-time-generated credential with the runner's log masker, so that
+# no later line of the (public, once the repository is public) job log can show it, whichever step or script prints it. The mask applies
+# to every following step of the job, which is why it is registered here, at generation, BEFORE the value is written anywhere or used.
+# A no-op everywhere else (a developer's terminal), so local output is unchanged. The `if` form, not `[[ ]] && ...`: under `set -e`
+# the latter would return 1 on a dev host and abort the script.
+ci_mask() {
+  if [[ "${GITHUB_ACTIONS:-}" == "true" && -n "${1:-}" ]]; then printf '::add-mask::%s\n' "$1"; fi
+}
+
 gen_all_secrets() {
   echo "== gen-certs =="; bash tools/gen-certs.sh "${2:-}"
   echo "== gen-secrets =="; bash tools/gen-secrets.sh
@@ -55,6 +64,10 @@ gen_all_secrets() {
   plprov="$(tools/provision-worker/bin/provision-worker admin-key)"
   plkey="$(echo "$plprov" | grep '^ADMIN_API_KEY=' | sed 's/^ADMIN_API_KEY=//; s/ .*//')"
   plhash="$(echo "$plprov" | grep '^ADMIN_API_KEY_HASH=' | sed 's/^ADMIN_API_KEY_HASH=//; s/ .*//')"
+  # The four plaintext bearer credentials just minted (the two worker tokens, the operator admin key, the platform service token)
+  # are the only run-time secrets that exist as strings; mask them before anything else runs. The dev KMS master key is a raw 32-byte
+  # file (tools/gen-secrets.sh) that no script prints, and the mTLS keys are PEM files that stay on disk.
+  ci_mask "$token"; ci_mask "$token2"; ci_mask "$admkey"; ci_mask "$plkey"
   # bcrypt hashes contain '$', which docker-compose .env interpolates — escape as '$$'.
   hash_esc="$(printf '%s' "$hash" | sed 's/\$/$$/g')"
   hash2_esc="$(printf '%s' "$hash2" | sed 's/\$/$$/g')"

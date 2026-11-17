@@ -1,5 +1,6 @@
-# Real-infra CI (Phase 0). Runs on every push/PR; a passing run is a REQUIRED status check
-# on the default branch. Brings up the SAME compose stack devs run (base + harness override),
+# Real-infra CI (Phase 0). Runs on pushes to main, on pull requests and on version tags, EXCEPT for
+# documentation-only changes (see `on:` below); a passing run is a REQUIRED status check on the default
+# branch. Brings up the SAME compose stack devs run (base + harness override),
 # executes the real-infra behavioral harness, then every BLOCKING structural gate. Nothing is
 # mocked — real Postgres + real Control + real worker + real Mailpit (CLAUDE.md Rule 3).
 #
@@ -9,7 +10,59 @@
 # derived, not written: tests/harness/checks/test_enumeration.sh rule 2 fails unless every
 # checks/*.sh is named in a run: command in this file, and prints the live number when it passes.
 name: real-infra
-on: [push, pull_request]
+# TRIGGERS (the repository is public and every run costs runner minutes, so a change that cannot alter behaviour does not run the stack).
+#   * push to main, any pull request, a manual dispatch, and a `v*` tag push (path filters are NOT evaluated for tag pushes, so a release
+#     tag always runs the full gate). Pushes to other branches do not run this workflow: their pull request does, once, instead of
+#     twice (push + pull_request used to run the whole stack twice per PR update).
+#   * `paths` lists everything EXCEPT prose documentation: `*.md` at the root, `Docs/**.md` and `Docs/**.svg`, NOTICE and LICENSE. A push
+#     or PR that touches ONLY those files does not run this workflow. Patterns are evaluated in order and a later positive pattern
+#     re-includes a path an earlier negative one excluded, so the docs a gate READS are put back at the end:
+#       Docs/api-contract.md        - tests/harness/checks/contract_drift.sh (served routes, error codes, describe vocabulary)
+#       Docs/config-reference.md    - tests/harness/checks/config_drift.sh + config_consumption.sh (documented key set, RESERVED markers)
+#       Docs/install-and-deploy.md  - tests/harness/checks/drain_grace.sh (the documented systemd TimeoutStopSec)
+#     (Docs/config-manifest.txt and Docs/config-consumers.txt are .txt, so they are never excluded.) When a gate script starts reading
+#     another markdown file, ADD THAT FILE to the re-include list below, or an edit that breaks the gate would skip the gate.
+#     Find them with:  grep -nE 'Docs/[A-Za-z0-9_./-]+\.md' tests/harness/checks/*.sh tests/harness/*.sh scripts/*.sh tools/*.sh
+#   * NOTE FOR BRANCH PROTECTION: a workflow skipped by a path filter reports NO check at all, so a docs-only pull request would sit on
+#     "Expected - waiting for status" if `behavioral` were a required check on main. Today no branch rule exists on this repository; if one
+#     is added, require the check knowing that, or drop the path filter on `pull_request`.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "**"
+      - "!*.md"
+      - "!NOTICE"
+      - "!LICENSE"
+      - "!Docs/**.md"
+      - "!Docs/**.svg"
+      - "Docs/api-contract.md"
+      - "Docs/config-reference.md"
+      - "Docs/install-and-deploy.md"
+  pull_request:
+    paths:
+      - "**"
+      - "!*.md"
+      - "!NOTICE"
+      - "!LICENSE"
+      - "!Docs/**.md"
+      - "!Docs/**.svg"
+      - "Docs/api-contract.md"
+      - "Docs/config-reference.md"
+      - "Docs/install-and-deploy.md"
+  workflow_dispatch:
+
+# Least privilege: this workflow only reads the repository. It reads no secret, so a pull request from a fork needs no guard (it gets a
+# read-only token and no secrets either way).
+permissions:
+  contents: read
+
+# A newer push to the same branch / PR supersedes an older run of the same workflow, so a burst of pushes costs one run, not one each.
+# Safe to cancel: every run starts from a clean runner and ends in `Tear down` (`if: always()`), and the newest commit is always run in full.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   behavioral:
@@ -21,9 +74,9 @@ jobs:
     env:
       DEV_RAM_PG: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.26"
 
@@ -31,7 +84,7 @@ jobs:
       # worker SHIPS on — services/worker/Dockerfile is `node:24-alpine` — not on whatever Node the runner image happens to
       # carry that month. An unpinned toolchain is a hidden variable: it is how `node --test "glob"` (Node >= 21 only) went
       # unnoticed until a Node 20 environment ran it.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
 

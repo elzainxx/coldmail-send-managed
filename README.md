@@ -1,5 +1,7 @@
 # SendManaged Module
 
+Source visible for transparency. All rights reserved; no license is granted. See [`NOTICE`](./NOTICE).
+
 A backend-only email-sending service. A platform hands it a mail list and a template; it handles
 everything else — routing across a pool of SMTP accounts, pacing, retries, error classification,
 and pulling unhealthy accounts out of rotation. There is no UI and no user-facing surface: the
@@ -88,8 +90,10 @@ deploy/                   production override material
 Tests run against real infrastructure — real Postgres, a real Control↔worker mTLS channel, a real SMTP
 server. There are no mock-the-database or mock-the-worker tests; that is a hard rule, not a
 preference (CLAUDE.md Rule 3). `bash scripts/dev.sh test` runs the full suite, and CI
-([`real-infra.yml`](./.github/workflows/real-infra.yml)) runs it on every push, followed by every gate in
-`tests/harness/checks/`. Each gate catches a specific class of drift:
+([`real-infra.yml`](./.github/workflows/real-infra.yml)) runs it on every push to `main`, every pull request and
+every `v*` tag, followed by every gate in `tests/harness/checks/` (a change that touches only prose
+documentation is skipped, except the three docs a gate reads; the filter and its reasoning are at the top of
+that workflow). Each gate catches a specific class of drift:
 
 | Gate | Fails when |
 |---|---|

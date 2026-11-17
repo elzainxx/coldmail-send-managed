@@ -22,6 +22,13 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same ref supersedes an older scan of it. Safe: every scan reads the FULL history (`--all`), so the newest run covers every
+# commit the cancelled one would have; cancelling cannot let a commit through unscanned. This workflow deliberately keeps running on every push
+# to any branch and on every pull request (no path filter): it is cheap (one checkout and one pinned binary) and it is the secret control.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   scan:
     runs-on: ubuntu-latest
@@ -29,7 +36,7 @@ jobs:
       GITLEAKS_VERSION: "8.30.1"
       GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           submodules: false

@@ -9,18 +9,30 @@
 # database with a job genuinely in flight and check that the Control halts cleanly and INVENTS NOTHING. It runs on a runner, not on a
 # developer machine, because the result that counts is the one on the real runner — and because the local VM cannot hold it.
 name: outage-drill
+# Dispatch-only, and it stays that way: it is NOT a per-push gate today (the header above says why), so there is no push or pull_request
+# trigger to filter. Nothing here runs unless the owner starts it.
 on: workflow_dispatch
+
+permissions:
+  contents: read
+
+# Same group shape as every workflow here, but cancel-in-progress is FALSE on purpose: this is a manually started evidence run (a real
+# `docker stop postgres` with a job in flight, ~minutes long). A second dispatch on the same ref must queue behind it, not silently kill the
+# run whose result the owner is waiting for. Nothing auto-triggers it, so there is no burst of superseded runs to economise.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   default-mode:
     runs-on: ubuntu-latest
     # NO `env: DEV_RAM_PG` on purpose — that is the whole point of this workflow.
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.26"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
 

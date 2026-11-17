@@ -19,15 +19,24 @@ on:
         required: false
         default: "50"
 
+permissions:
+  contents: read
+
+# cancel-in-progress is FALSE on purpose: this is a manually started N-run proof (default 50 runs of a real-Postgres test). A second dispatch
+# on the same ref queues behind it instead of silently discarding the evidence the first one was started to produce. Nothing auto-triggers it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   repeat:
     runs-on: ubuntu-latest
     env:
       DEV_RAM_PG: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.26"
 
@@ -37,5 +46,13 @@ jobs:
       - name: Bring up Postgres only (the test needs a database, not the stack)
         run: $(bash scripts/dev.sh compose) up -d --wait postgres
 
+      # The dispatch input reaches the shell through an environment variable, never by expanding `${{ inputs.count }}` into the script text
+      # (a script-injection vector once the repository is public), and is checked to be a plain positive integer before it is used.
       - name: Run the test N times — zero failures, N evidence lines
-        run: bash tests/harness/checks/consume_contention.sh --repeat "${{ inputs.count || '50' }}"
+        env:
+          REPEAT_COUNT: ${{ inputs.count || '50' }}
+        run: |
+          case "$REPEAT_COUNT" in
+            ''|*[!0-9]*|0) echo "count must be a positive integer"; exit 2;;
+          esac
+          bash tests/harness/checks/consume_contention.sh --repeat "$REPEAT_COUNT"

@@ -3,7 +3,8 @@
 //
 // THE DEFECT THIS PINS (found 2026-11-08 on the first real-Linux run of the worker unit tests): the sink greeted a SECOND time
 // on the TLS socket right after STARTTLS. A real server never does (RFC 3207 §4.2: the client restarts with EHLO). The reader
-// in src/smtp.js drops a reply that arrives while no read() is pending, so the stray "220" was either swallowed (the tests
+// in src/smtp.js dropped a reply that arrived while no read() was pending (it now queues it — the 2026-11-17 reply-queue fix —
+// which makes a stray "220" deterministically fatal rather than timing-dependent), so the stray "220" was either swallowed (the tests
 // passed) or taken for the reply to the client's post-TLS EHLO, shifting every later reply by one — AUTH LOGIN "answered" with
 // a 250 and 10 tests failing with auth_failed, S1/S3 (credential scrub/zeroing) among them. Which one happened depended on
 // event-loop timing between 'secureConnect' and the first data event, i.e. on the PLATFORM: measured 2026-11-08, 10 red on

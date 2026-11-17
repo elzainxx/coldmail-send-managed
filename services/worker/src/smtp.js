@@ -28,12 +28,25 @@ export class SMTPError extends Error {
 
 // A tiny line-oriented SMTP reader/writer over a socket. Reads multiline replies (RFC 5321:
 // "250-" continuation lines, "250 " final line) and returns { code, text }.
-class SmtpConn {
+//
+// REPLIES ARE QUEUED, NOT ONLY DELIVERED TO A WAITER (the M2 close-out, ported from module 3's fix of the
+// identical code). A complete reply used to be handed to the waiter registered by read() — and DROPPED
+// when none was registered yet. Every command is `await conn.write(line)` then `conn.read()`, and a fast
+// server can answer before the write's continuation has called read(), so that reply vanished and the
+// session sat until the 30 s timeout: ~1 session in 10 against a fast server (0 of 240 at 8 ms reply
+// latency, which is why real servers rarely hit it). A complete reply that arrives with no waiter now
+// goes into `replies`, and read() takes from there first. Order is preserved (one reply per read(),
+// FIFO), and the waiter path is unchanged for a reply that arrives after read().
+//
+// Exported only so test/smtp_reply_queue.test.mjs can drive the reader over a real socket without
+// standing up a whole session; the session code in this file is the only production user.
+export class SmtpConn {
   constructor(socket, timeoutMs) {
     this.sock = socket;
     this.timeoutMs = timeoutMs;
     this.buf = "";
     this.waiters = [];
+    this.replies = []; // complete replies that arrived before any read() was waiting for them
     this.closed = false;
     this.sock.setEncoding("utf8");
     this.sock.on("data", (d) => this.#onData(d));
@@ -65,14 +78,21 @@ class SmtpConn {
       const code = parseInt(line.slice(0, 3), 10);
       const text = this._acc.join("\n");
       this._acc = null;
+      const reply = { code, text };
       const w = this.waiters.shift();
-      if (w) w.resolve({ code, text });
+      if (w) w.resolve(reply);
+      else this.replies.push(reply); // nobody is reading yet: keep it for the next read(), never drop it
     }
   }
 
-  // read() awaits the next complete SMTP reply.
+  // read() awaits the next complete SMTP reply. A reply that already arrived is returned at once, FIFO;
+  // that holds even if the socket has since closed — a reply that was received is delivered, exactly as
+  // one that arrived while a waiter was registered always was — and only when nothing is queued does a
+  // closed connection reject.
   read() {
     return new Promise((resolve, reject) => {
+      const queued = this.replies.shift();
+      if (queued) return resolve(queued);
       if (this.closed) return reject(new SMTPError("connection_closed", ""));
       this.waiters.push({ resolve, reject });
     });

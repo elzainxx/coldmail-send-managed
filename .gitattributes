@@ -12,3 +12,6 @@
 # Files ALREADY STORED with CRLF (vendored upstream sources and frozen records): no conversion in
 # either direction, so their committed bytes never change. Do not widen this list to hide new CRLF.
 Docs/history/open-decisions.md -text
+
+# Golden message bytes (services/worker/test/testdata): CRLF line endings are PART OF THE FIXTURE (the worker renders RFC 5322 with CRLF), so git must never convert them in either direction.
+services/worker/test/testdata/** -text

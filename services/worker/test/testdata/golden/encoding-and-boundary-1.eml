@@ -1,0 +1,21 @@
+From: "Golden Sender" <sender@example.org>
+To: rcpt@example.com
+Subject: Golden message
+Reply-To: reply@example.net
+Message-ID: <golden-job-both-1@example.org>
+Date: Wed, 18 Nov 2026 10:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="----=_Part_1144b410a32e83d7"
+
+------=_Part_1144b410a32e83d7
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+<html><head><title>Golden</title></head><body><p style=3D"margin:10px 4px;p=
+adding:8px">Hello, caf=C3=A9 =E2=98=83 =E2=80=94 this is the golden message=
+.</p><a href=3D"https://example.com/landing?x=3D1">landing page</a><div><sp=
+an>a</span><span>b</span><span>c</span><span>d</span></div><div><span>e</sp=
+an><span>f</span><span>g</span><span>h</span></div><ul><li>one</li><li>two<=
+/li><li>three</li><li>four</li></ul>=0A<p>The next line starts with a dot (=
+SMTP dot-stuffing).</p>=0A.this line starts with a dot=0A</body></html>
+------=_Part_1144b410a32e83d7--

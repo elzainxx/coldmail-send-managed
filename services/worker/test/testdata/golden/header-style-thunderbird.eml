@@ -1,0 +1,18 @@
+Date: Wed, 18 Nov 2026 10:00:00 +0000
+From: "Golden Sender" <sender@example.org>
+Subject: Golden message
+To: rcpt@example.com
+Message-ID: <golden-job-tbird@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="_NextPart_02011c446f6092233c4a_"
+Reply-To: reply@example.net
+
+--_NextPart_02011c446f6092233c4a_
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+<html><head><title>Golden</title></head><body><p style="margin:10px 4px;padding:8px">Hello, café ☃ — this is the golden message.</p><a href="https://example.com/landing?x=1">landing page</a><div><span>a</span><span>b</span><span>c</span><span>d</span></div><div><span>e</span><span>f</span><span>g</span><span>h</span></div><ul><li>one</li><li>two</li><li>three</li><li>four</li></ul>
+<p>The next line starts with a dot (SMTP dot-stuffing).</p>
+.this line starts with a dot
+</body></html>
+--_NextPart_02011c446f6092233c4a_--

@@ -1,0 +1,19 @@
+From: "Golden Sender" <sender@example.org>
+To: rcpt@example.com
+Subject: Golden message
+Reply-To: reply@example.net
+Message-ID: <golden-job-enc-3@example.org>
+Date: Wed, 18 Nov 2026 10:00:00 +0000
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: base64
+
+PGh0bWw+PGhlYWQ+PHRpdGxlPkdvbGRlbjwvdGl0bGU+PC9oZWFkPjxib2R5PjxwIHN0eWxlPSJt
+YXJnaW46MTBweCA0cHg7cGFkZGluZzo4cHgiPkhlbGxvLCBjYWbDqSDimIMg4oCUIHRoaXMgaXMg
+dGhlIGdvbGRlbiBtZXNzYWdlLjwvcD48YSBocmVmPSJodHRwczovL2V4YW1wbGUuY29tL2xhbmRp
+bmc/eD0xIj5sYW5kaW5nIHBhZ2U8L2E+PGRpdj48c3Bhbj5hPC9zcGFuPjxzcGFuPmI8L3NwYW4+
+PHNwYW4+Yzwvc3Bhbj48c3Bhbj5kPC9zcGFuPjwvZGl2PjxkaXY+PHNwYW4+ZTwvc3Bhbj48c3Bh
+bj5mPC9zcGFuPjxzcGFuPmc8L3NwYW4+PHNwYW4+aDwvc3Bhbj48L2Rpdj48dWw+PGxpPm9uZTwv
+bGk+PGxpPnR3bzwvbGk+PGxpPnRocmVlPC9saT48bGk+Zm91cjwvbGk+PC91bD4KPHA+VGhlIG5l
+eHQgbGluZSBzdGFydHMgd2l0aCBhIGRvdCAoU01UUCBkb3Qtc3R1ZmZpbmcpLjwvcD4KLnRoaXMg
+bGluZSBzdGFydHMgd2l0aCBhIGRvdAo8L2JvZHk+PC9odG1sPg==

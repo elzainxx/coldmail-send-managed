@@ -99,9 +99,10 @@ EOF
 
 # seed_rows — the system user + BOTH dev worker rows. Called by `seed` and, crucially, by `reset`:
 # `down -v` drops the volume that HELD these rows, so a reset without a re-seed leaves every worker
-# unable to register (`register rejected: unauthenticated`) until it burns its retry budget and
-# exits 1. `up --wait` reports the worker "healthy" moments before it dies, so the failure looks like
-# a green start. Found walking Docs/install-and-deploy.md#part-7--developing-and-testing-locally Stage 0 as an operator.
+# unable to register (`register rejected: unauthenticated`) until a row is seeded (it used to burn its
+# retry budget and exit 1; since the Phase 3 close-out it keeps retrying instead, so a late seed is
+# survivable, but the CI step still requires ZERO rejections on the first attempt). A reset without a
+# re-seed still looks like a green start with a worker that is not serving. Found walking Docs/install-and-deploy.md#part-7--developing-and-testing-locally Stage 0 as an operator.
 seed_rows() {
   # Read the values by grep (NOT `source .env`: bash would expand the '$' in the bcrypt
   # hash). Un-escape the compose '$$' back to '$' for the real hash the Control compares.
@@ -144,7 +145,7 @@ case "$cmd" in
   reset)   # down -v drops the volume, so the worker rows MUST be re-seeded before any worker can register.
            # Order is load-bearing: postgres (so we can connect) -> migrate (send_managed.boxes must EXIST
            # before we insert into it) -> seed -> the rest. Seeding before migrate fails; seeding
-           # after `up` is too late, because the worker has already burned its retry budget and exited.
+           # after `up` is too late: the worker's first attempts are already refused (it keeps retrying, but the CI step requires zero rejections).
            $COMPOSE --profile multiworker down -v
            $COMPOSE up -d --wait postgres
            $COMPOSE up migrate

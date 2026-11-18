@@ -25,6 +25,10 @@ export function startSink(opts = {}) {
   // form, not just the plaintext (§4.4). Default false (well-behaved server).
   const echoAuthInError = opts.echoAuthInError === true;
   const received = []; // every line the client sent (plaintext + TLS phases)
+  // messages: the DATA payload of every message the sink ACCEPTED, as the wire carried it: CRLF line endings,
+  // SMTP dot-stuffing undone (RFC 5321 4.5.2), without the terminating "." line. This is what a downstream
+  // server (and anything that signs or parses the message) actually receives from the worker.
+  const messages = [];
   let tlsActive = false;
 
   const tlsOpts = {
@@ -65,7 +69,14 @@ export function startSink(opts = {}) {
 
   function onLine(sock, line, isTls, setData, clearData, inData) {
     if (inData()) {
-      if (line === ".") { clearData(); write(sock, "250 2.0.0 Ok: queued as SINK12345"); }
+      if (line === ".") {
+        clearData();
+        messages.push((sock._data || []).join("\r\n"));
+        sock._data = [];
+        write(sock, "250 2.0.0 Ok: queued as SINK12345");
+      } else {
+        (sock._data ||= []).push(line.startsWith("..") ? line.slice(1) : line);
+      }
       return;
     }
     const up = line.toUpperCase();
@@ -104,6 +115,7 @@ export function startSink(opts = {}) {
       write(sock, "250 2.1.5 Ok");
     } else if (up === "DATA") {
       write(sock, "354 End data with <CR><LF>.<CR><LF>");
+      sock._data = [];
       setData();
     } else if (up === "QUIT") {
       write(sock, "221 2.0.0 Bye");
@@ -123,6 +135,7 @@ export function startSink(opts = {}) {
       resolve({
         port,
         received,
+        messages,
         tlsWasActive: () => tlsActive,
         close: () => new Promise((r) => server.close(r)),
       });

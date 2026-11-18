@@ -313,7 +313,7 @@ func TestCancel_RaceWithClaim_NeverLeavesAnItemBothCancelledAndSent(t *testing.T
 	var won claimedJob
 	n := 0
 	for rows.Next() {
-		if err := rows.Scan(&won.id, &won.userID, &won.campaignID, &won.recipient, &won.subject, &won.body, &won.replyTo); err != nil {
+		if err := rows.Scan(&won.id, &won.userID, &won.campaignID, &won.recipient, &won.subject, &won.body, &won.text, &won.replyTo); err != nil {
 			t.Fatalf("scan claimed: %v", err)
 		}
 		n++

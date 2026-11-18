@@ -86,7 +86,7 @@ func (s *Server) handleAccountEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := parseLimit(r)
-	cur, cerr := parseCursor(r)
+	cur, cerr := parseCursor(r, cursorScopeAccountEvents(id))
 	if cerr != nil {
 		s.fail(w, r, cerr)
 		return
@@ -144,7 +144,7 @@ func (s *Server) handleAccountEvents(w http.ResponseWriter, r *http.Request) {
 	if len(items) > limit {
 		last := items[limit-1]
 		items = items[:limit]
-		c := encodeCursor(last.cursorTS, last.ID)
+		c := encodeCursor(cursorScopeAccountEvents(id), last.cursorTS, last.ID)
 		nextCursor = &c
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor})

@@ -155,7 +155,7 @@ internal reason, SQL, SQLSTATE, credential, ciphertext, key-id, or internal host
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/v1/admin/accounts` | create an account (encrypt-on-write credential intake) |
-| GET | `/v1/admin/accounts` | list (cursor paginated; filters `pool_id`/`paused`/`quarantined`/`disabled`/`user_id`) |
+| GET | `/v1/admin/accounts` | list (cursor paginated, see "Pagination cursors"; filters `pool_id`/`paused`/`quarantined`/`disabled`/`user_id`) |
 | GET | `/v1/admin/accounts/{id}` | read one |
 | PATCH | `/v1/admin/accounts/{id}` | update (omit `smtp_secret` = unchanged, structural) |
 | DELETE | `/v1/admin/accounts/{id}` | hard delete → `204`. The audit row survives: `send_managed.job_events` and `send_managed.account_events` rows for the account are KEPT, with their `account_id` set to NULL by the FK and every other column byte-unchanged (`send_managed_0024`, ADR-0012). Deleting a **worker** behaves the same way (`box_id` → NULL). *Historical note: from Phase 1 through Phase 10 this returned `500` for any account that had ever been assigned a job — `job_events`' two `ON DELETE SET NULL` FKs were blocked by its unconditional append-only trigger. Fixed 2026-07-29 by `send_managed_0024`; nothing was ever dropped or corrupted, the delete simply aborted atomically. If you see a `500` here, check that migration `0024` is applied* |
@@ -210,7 +210,7 @@ the internal reason (`already_in_state:*`, `not_in_state:*`, `not_manual_pause`)
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/v1/admin/pools` | create (shared/dedicated; owner rules; fallback cycle check) |
-| GET | `/v1/admin/pools` | list (cursor paginated; filters `kind`/`owner_user_id`/`enabled`/`user_id`) |
+| GET | `/v1/admin/pools` | list (cursor paginated, see "Pagination cursors"; filters `kind`/`owner_user_id`/`enabled`/`user_id`) |
 | GET | `/v1/admin/pools/{id}` | read one |
 | PATCH | `/v1/admin/pools/{id}` | update (`kind`/`owner_user_id` immutable) |
 | DELETE | `/v1/admin/pools/{id}` | delete (RESTRICT if it still has accounts → clean 409) |
@@ -377,7 +377,7 @@ schema change:
   "items": {                          // paginated per-job detail, cursor-paginated
     "results": [
       { "job_item_id": "…", "state": "sent",
-        "provider_message_id": "…", "completed_at": "…", "attempt_count": 1,
+        "provider_message_id": "…", "completed_at": "…", "attempt_count": 0,   // a send that succeeded at the first try reports 0 (see "What `attempt_count` counts")
         "reason": null, "error_class": null },        // M2-G1: ALWAYS present, null when empty
       { "job_item_id": "…", "state": "failed",
         "provider_message_id": null, "completed_at": "…", "attempt_count": 3,
@@ -413,9 +413,9 @@ pattern as the admin list endpoints, §5.1): `?campaign_id=<uuid>&user_id=<uuid>
 from a previous response's next_cursor>&page_size=<int>`. `page_size` defaults to **100** and
 clamps to a max of **200**; a missing, zero, negative, or non-numeric `page_size` silently falls
 back to the default (never a `400`). `cursor` is opaque (base64) — pass back exactly what
-`next_cursor` returned; a malformed `cursor` returns `400 validation_failed`. `next_cursor:null`
+`next_cursor` returned; a bad, malformed or forged `cursor` returns `400 validation_failed` (see "Pagination cursors" below), never a `500`. `next_cursor:null`
 means the last page. **The cursor names the LAST item the page returned** (M2-G5): the query fetches `page_size+1` rows only to learn whether another page exists, and the next page starts strictly after the last returned item. Until `send_managed_0028`'s release the cursor was built from the extra row instead, so the item at **every page boundary was skipped** — silently, for any campaign larger than `page_size`; a client that paged a larger campaign before this fix should re-read it. Walking `next_cursor` to `null` now returns exactly the campaign's items, once each, in `(created_at, id)` order (pinned by a multi-page exact-set test with a paired control that reproduces the old behaviour).
-| GET | `/v1/describe` | module self-description (Phase 9 §2, finalized): `capabilities` (honest — `sequences:false`, no tracking, `content_variation:true`) + `pricing` (`unit_price_credits` — the SAME live value `quote` multiplies by — and `tiers` — `shared`/`dedicated`, the one real V1 axis, **identical unit price in V1**; dedicated is isolation, not a premium — plus **`cost_fields_inert`** (bool, additive, audit finding **D22**/fix-plan item 5b): `true` when `unit_price_credits` is `0`, i.e. when `quote`'s `cost` is structurally zero rather than computed, so a cost-preview UI can tell "this module does not charge per recipient" from "the price lookup returned 0" — both are `200` with `cost:0` otherwise. Normally `false` here (this module charges, seeded `1`), but `unit_price_credits` is live-retunable with no redeploy, so an operator CAN put this module in that state — and under a declared `flat_per_recipient` model a `0` contradicts the model, which makes the declaration more load-bearing here, not less. **DERIVED from the live value on every request, never hardcoded**; the `unitprice_test.go` zero-retune block is the control that a literal `false` cannot pass) + **`model`** (`"flat_per_recipient"` — this module's own answer, unchanged; now emitted from the same constant the declared set below is built from, so the reported model and the declared set cannot be edited apart) + **`models[]`** (fix-plan item 6 — the platform's whole declared set of pricing models, `{flat_per_recipient, flat_subscription, free}`, ADDITIVE-ONLY per Rule 5; `model` above is always a MEMBER of it. `free` is declared though neither sender reports it, deliberately: the point of publishing the set is that a client writes its branch once and handles a module it has not met yet, so declaring only today's two values would make a third module's launch a client-side code change) + **`vocabularies{}`/`error_codes[]`** (fix-plan item 8 — see the dedicated note below) |
+| GET | `/v1/describe` | module self-description (Phase 9 §2, finalized): `capabilities` (honest — `sequences:false`, no tracking, `content_variation:true`, and — additive, Phase 3 close-out B3 — **`plain_text_alternative:true`**: the module sends a `multipart/alternative` message when the platform supplies a plain-text part, see "The optional plain-text part" below) + `pricing` (`unit_price_credits` — the SAME live value `quote` multiplies by — and `tiers` — `shared`/`dedicated`, the one real V1 axis, **identical unit price in V1**; dedicated is isolation, not a premium — plus **`cost_fields_inert`** (bool, additive, audit finding **D22**/fix-plan item 5b): `true` when `unit_price_credits` is `0`, i.e. when `quote`'s `cost` is structurally zero rather than computed, so a cost-preview UI can tell "this module does not charge per recipient" from "the price lookup returned 0" — both are `200` with `cost:0` otherwise. Normally `false` here (this module charges, seeded `1`), but `unit_price_credits` is live-retunable with no redeploy, so an operator CAN put this module in that state — and under a declared `flat_per_recipient` model a `0` contradicts the model, which makes the declaration more load-bearing here, not less. **DERIVED from the live value on every request, never hardcoded**; the `unitprice_test.go` zero-retune block is the control that a literal `false` cannot pass) + **`model`** (`"flat_per_recipient"` — this module's own answer, unchanged; now emitted from the same constant the declared set below is built from, so the reported model and the declared set cannot be edited apart) + **`models[]`** (fix-plan item 6 — the platform's whole declared set of pricing models, `{flat_per_recipient, flat_subscription, free}`, ADDITIVE-ONLY per Rule 5; `model` above is always a MEMBER of it. `free` is declared though neither sender reports it, deliberately: the point of publishing the set is that a client writes its branch once and handles a module it has not met yet, so declaring only today's two values would make a third module's launch a client-side code change) + **`vocabularies{}`/`error_codes[]`** (fix-plan item 8 — see the dedicated note below) |
 
 **`GET /v1/describe`'s `vocabularies{}` and `error_codes[]`** (fix-plan item 8) — `capabilities` and
 `pricing` told a caller what this module can DO and what it CHARGES, but never which VALUES its
@@ -545,6 +545,86 @@ failure additive-only versioning was meant to prevent.
 > the existing keys' already-established delivery mechanism, and leave the two duplicate parameters
 > unconsumed rather than introduce a second, competing source of truth for the same worker behavior.
 
+## Pagination cursors — every paginated route, and what a bad cursor answers (Phase 3 close-out B2)
+
+Four routes page: `GET /v1/report?campaign_id=` (Domain A, `page_size`) and, on Domain B, `GET /v1/admin/accounts`, `GET /v1/admin/pools`
+and `GET /v1/admin/accounts/{id}/events` (`limit`). All four use the same keyset `(created_at, id)` and the same opaque
+`next_cursor`: pass back exactly what the previous page returned.
+
+**A bad, malformed or forged `cursor` is never a server error.** On every one of the four routes, a `cursor` that is not base64url
+(no padding), is not a keyset position (`<RFC 3339 timestamp>|<canonical UUID>` in one of the two shapes below), is longer than
+512 bytes, or was minted for a different route, user or campaign, is answered `400` with the standard envelope, before any query runs:
+
+```json
+{ "error": { "code": "validation_failed", "message": "One or more fields are invalid.",
+             "details": [ { "field": "cursor", "issue": "malformed" } ], "request_id": "req_..." } }
+```
+
+The code is the existing `validation_failed` (no new code), `details` is exactly `[{field:"cursor", issue:"malformed"}]`, the message is
+the one fixed sentence of the code, and the body carries no item. (Until the close-out a value that was well-formed base64 with a `|` in
+it but not a timestamp and a UUID — for example `base64url("x|y")` — passed the check, reached the SQL cast and answered `500
+internal_error`; the contract had always said 400.) An empty `cursor=` is "no cursor": the first page.
+
+**A cursor is bound to the scope it was minted for.** Report: this route, this `user_id` and this `campaign_id`. Admin lists: this route
+(and, for the events list, this account id). A cursor of another scope — campaign A's cursor on campaign B, one tenant's on another's (even
+with the right campaign id), `/accounts`' on `/pools`, one account's events cursor on another account's — is refused with the SAME `400`,
+indistinguishable from a malformed one, and nothing of the other scope's data is read or returned. The binding is a short hash carried inside
+the opaque value; it is a check against mix-ups, not authentication: a cursor a caller writes by hand for its OWN scope is accepted and can only
+name a position inside that caller's own, tenant-scoped result set. Cursor format (opaque to clients, stated for the record): v1 is
+`base64url("v1|<created_at>|<id>|<scope tag>")`; the older `base64url("<created_at>|<id>")` (every cursor minted before the close-out) is still
+accepted, validated as strictly, so a walk that is in progress across a deploy does not break — it carries no scope, so it cannot be refused for the
+wrong one.
+
+## The optional plain-text part (`rendered_text`, Phase 3 close-out B3)
+
+The message body has never entered this module through an API field: the platform writes the rendered message into its own table
+`public.job_items` and calls `POST /v1/run` with only `{job_item_id, user_id}`, and the module copies the row into `send_managed.jobs`.
+The optional plain-text alternative follows the same path, so **there is no `text` field on `POST /v1/run`** (the run body is unchanged and is still
+decoded strictly) and **no new route**:
+
+| Where | What |
+|---|---|
+| `public.job_items.rendered_text` | **platform-owned**, `text`, **nullable, no default**. The platform adds the column in its own migration (before this module is deployed against that schema: the migration pre-flight `db/preflight/check_platform_tables.sql` refuses to run without it) and writes it. The module only reads it. |
+| `send_managed.jobs.rendered_text` | `text` NULL (migration `send_managed_0030`). `POST /v1/run` copies `public.job_items.rendered_text` into it **verbatim**, in the same statement that copies `rendered_body`. Existing rows read as NULL. At most **1 MiB** (1,048,576 bytes; CHECK `jobs_rendered_text_size_check`): a larger text is refused by `POST /v1/run` with `400 validation_failed` (no `details`) and no job row is written. The HTML body has no such limit (unchanged). |
+| worker wire: `push_job.send.text` | the same string, only when it is a real text part; the key is OMITTED otherwise, so such a frame is the one an older Control sent. |
+
+**What counts as "no text part".** `rendered_text` NULL, the empty string, and a string with no non-whitespace character (spaces, tabs, CR, LF, no-break and other
+Unicode spaces) are ONE meaning — *absent* — and the message is then the **single-part `text/html` message exactly as before, byte for byte** (a golden test of the previous
+bytes covers the neutral message and every content-variation profile). Anything else is a text part, kept verbatim: no trimming, no re-wrapping.
+
+**What the message is when a text part is present.** `multipart/alternative`, parts in RFC 2046 order (least to most faithful): `text/plain` FIRST, `text/html` LAST. The outer
+headers are the single-part ones (From, To, Subject, Reply-To, Message-ID, Date, MIME-Version) with `Content-Type: multipart/alternative; boundary="----=_Alt_<24 hex>"` in place of the
+single-part `Content-Type`/`Content-Transfer-Encoding` (a multipart entity carries no transfer encoding). Each part states `Content-Type: text/plain; charset="utf-8"` /
+`text/html; charset="utf-8"` and `Content-Transfer-Encoding: 8bit` — the encoding the HTML part has always had; when the `variation_encoding_rotation` toggle is on both parts use
+the same rotated encoding (quoted-printable or base64) and decode back to the originals, and `variation_mime_boundary_rotation` only changes the boundary's style (the type stays
+`multipart/alternative`, the parts and their order are untouched). The text part's line endings are normalised to CRLF; the HTML part is exactly the body that was sent. The
+content-variation stages (minify, comment injection, ...) act on the HTML part only.
+
+**The duplicate guarantee holds.** The boundary is a hash of the **job id** — the identity every retry of one item shares — and nothing else: no random value and no clock is
+read. A retry of the same item renders byte-identical bytes (and the Control's own `Message-ID` is still `<job id@sending domain>`), a different item has a different boundary, and
+if the boundary line ever occurred inside a part the next deterministic candidate is used. The message's `Date` header is, as it has always been, the Control's send-time input
+and is the one thing that differs between two attempts. There is no DKIM or other signing code in this module: whatever the sending account's provider signs, it signs the bytes the
+worker hands to `DATA`, which a test proves are exactly the assembled message (dot-stuffing undone), nothing appended after it.
+
+**Not carried.** `send_logs` (the 7-day debug record) keeps recording the HTML body only; the text part is not stored there. The reports and `describe` never return the text.
+
+## What `attempt_count` counts (Phase 3 close-out B4)
+
+`attempt_count` (on `GET /v1/report`, single job and campaign items) is **not the number of SMTP attempts.** It is a `SMALLINT` that starts at **0** and is raised by
+**one, saturating at 3** (`max_attempts`; it never reads above 3, whatever happens), by exactly three kinds of event:
+
+1. **a worker-reported classified failure** of an attempt (`transport_4xx`, `auth_failure`, `throttle`, `timeout`, `unknown`) — whether the job is then requeued or ends
+   `failed`/`attempts_exhausted` or `cancelled`;
+2. **a reclaim** — the Control taking back a job whose lease expired or whose worker went silent — of a job that was `assigned` **or** `sending`;
+3. **a dispatcher-side requeue of a job that never reached SMTP**: `no_eligible_account`, `no_worker_available`, `push_failed`, or the header-injection guard.
+
+It does **not** change on: a claim (`queued` → `assigned`), `assigned` → `sending`, a successful send, a bounce, a cancel, pool exhaustion, a worker reconnect re-delivering an
+outcome the Control already applied (a duplicate or stale report is a no-op), or a dispatch pause. So **a send that succeeds at the first try reports `0`**, a job that waited for a
+worker or an account can read 1-3 without ever having been tried, and a job that failed ten times reads 3. **Never bill, retry or reason on it.** The real count of failed SMTP attempts is
+`failed_attempt_count` (the failures of kind 1 and the reclaims of a `sending` job — never kind 3 or a reclaim of an `assigned` job): it drives the attempt cap and is **not exposed**; no
+field is added. The meaning is pinned by `internal/dispatch/attempt_count_meaning_test.go` (the rules above, each with its "unchanged" control) and `internal/platformapi/attempt_count_report_test.go`
+(the report returns the stored value verbatim).
+
 ## Why an item is in its state — `reason` and `error_class` (M2-G1, additive)
 
 Every item of the single-job report and of the campaign report carries two keys, **always present**
@@ -560,7 +640,7 @@ responses).
 // GET /v1/report?job_id=…&user_id=…   (single-job shape; the two optional keys are still omitted until set)
 { "job_id": "…", "state": "failed", "attempt_count": 3, "completed_at": "…",
   "reason": "attempts_exhausted", "error_class": "unknown" }
-{ "job_id": "…", "state": "sent", "attempt_count": 1, "provider_message_id": "…", "completed_at": "…",
+{ "job_id": "…", "state": "sent", "attempt_count": 0, "provider_message_id": "…", "completed_at": "…",   // 0: sent at the first try
   "reason": null, "error_class": null }
 ```
 
@@ -588,6 +668,15 @@ the push failed, the header-injection guard) is **never** counted — those mean
 6th failed attempt (not the 5th) moves the job to `failed`/`attempts_exhausted` with `completed_at` and an
 event row; the message never reached the world, so the platform does not charge for it. Before this, `failed`
 had exactly one writer (pool exhaustion) and a persistent 554 requeued forever.
+
+> **Phase 3 close-out B1 — the worker never gives up (additive `register_ack` fields).** `register_ack` gains `reconnect_base_ms`, `reconnect_cap_ms` and
+> `reconnect_jitter_pct` (integers, each OMITTED when the seeded row is unreadable or outside its range; `reconnect_jitter_pct: 0` is a real value and is sent), the three
+> `worker_reconnect_*` config dials (`Docs/config-reference.md`). The worker reconnects for ever with a capped exponential backoff plus jitter and adopts them for every wait after its
+> next registration. It no longer exits after ~30 failed attempts and no longer exits when its `register` is refused. Work claimed before or during an outage is unchanged: a produced outcome
+> stays buffered and is replayed (bounded by `box_outcome_buffer_ttl_sec`); a job pushed but never reported is reclaimed by the Control's lease / heartbeat rules.
+>
+> **Phase 3 close-out B3 — the optional plain-text part (additive `push_job.send.text`).** A string, present only when the job has a real plain-text part (see "The optional plain-text part");
+> the worker then builds `multipart/alternative`. Absent, the frame and the message are exactly what they were.
 
 ## What is NOT part of the public REST contract
 

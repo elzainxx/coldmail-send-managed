@@ -71,7 +71,35 @@ type RegisterAck struct {
 	// treating 0 as meaningful here would be INVENTING semantics for a locked spec, not fixing a
 	// documented one, which CLAUDE.md Rule 2 reserves for an Open Decision. Flagged, not fixed.
 	OutcomeBufferTTLSec int `json:"outcome_buffer_ttl_sec,omitempty"`
+	// ReconnectBaseMS / ReconnectCapMS / ReconnectJitterPct deliver the three seeded reconnect dials
+	// (worker_reconnect_base_ms, worker_reconnect_cap_ms, worker_reconnect_jitter_pct; Phase 3 close-out B1)
+	// to the DB-less worker on accept. The worker reconnects for ever with a capped exponential backoff plus
+	// jitter (services/worker/src/reconnect.js) and adopts these for every wait that follows. POINTERS, not
+	// plain ints, on purpose: nil means "not delivered" (a config row unreadable or outside its legal range,
+	// or an older Control) and the worker then falls back to its environment override / built-in default,
+	// while a jitter of 0 is a REAL value that must reach the worker as 0 and so cannot be omitempty-dropped.
+	// Additive-only: an older worker ignores all three; the legal ranges are the Reconnect*Min/Max constants
+	// below (mirrored in reconnect.js and pinned equal by reconnect_dials_test.go).
+	ReconnectBaseMS    *int `json:"reconnect_base_ms,omitempty"`
+	ReconnectCapMS     *int `json:"reconnect_cap_ms,omitempty"`
+	ReconnectJitterPct *int `json:"reconnect_jitter_pct,omitempty"`
 }
+
+// The legal range (inclusive) of each worker reconnect dial. The MINIMUM LEGAL values (10 ms base, 10 ms
+// cap, 0 % jitter) are what lets a test harness run the worker with a 50 ms base and a 200 ms cap and see
+// more than thirty reconnect attempts in a few seconds; the maxima keep a typo (a value in seconds typed as
+// milliseconds, or the reverse) from parking a worker for hours. Enforced on every config PUT
+// (adminapi/config_validate.go), on every read before delivery (workerlink) and, on the worker, on every
+// received or environment-supplied value (reconnect.js). A value outside the range is REJECTED, never
+// clamped.
+const (
+	ReconnectBaseMinMS    = 10
+	ReconnectBaseMaxMS    = 60000
+	ReconnectCapMinMS     = 10
+	ReconnectCapMaxMS     = 600000
+	ReconnectJitterMinPct = 0
+	ReconnectJitterMaxPct = 100
+)
 
 // Heartbeat refreshes last_heartbeat_at even when idle (§3.2).
 type Heartbeat struct {
@@ -82,13 +110,19 @@ type Heartbeat struct {
 
 // Send is the rendered message content the worker transmits (§2.3, headers per §8).
 type Send struct {
-	Recipient   string            `json:"recipient"`
-	FromAddress string            `json:"from_address"`
-	FromName    string            `json:"from_name,omitempty"`
-	ReplyTo     string            `json:"reply_to,omitempty"`
-	Subject     string            `json:"subject"`
-	Body        string            `json:"body"`
-	Headers     map[string]string `json:"headers"` // the §8 minimum guaranteed set the Control built
+	Recipient   string `json:"recipient"`
+	FromAddress string `json:"from_address"`
+	FromName    string `json:"from_name,omitempty"`
+	ReplyTo     string `json:"reply_to,omitempty"`
+	Subject     string `json:"subject"`
+	Body        string `json:"body"`
+	// Text is the OPTIONAL plain-text alternative of the message (Phase 3 close-out B3): the platform's
+	// public.job_items.rendered_text, copied into send_managed.jobs.rendered_text at run. Present (non-empty,
+	// at least one non-whitespace character) => the worker builds a multipart/alternative message, the
+	// text/plain part FIRST and the text/html Body LAST. Absent => the single text/html message it has always
+	// built, byte for byte: omitempty, so a push_job without text is the same frame an older Control sent.
+	Text    string            `json:"text,omitempty"`
+	Headers map[string]string `json:"headers"` // the §8 minimum guaranteed set the Control built
 }
 
 // SMTP carries the connection + the decrypted plaintext credential for ONE send (§2.3). secret

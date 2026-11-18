@@ -19,12 +19,13 @@ package platformapi
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
+
+	"github.com/coldmail-send-managed/control/internal/pagecursor"
 )
 
 // campaignTotals mirrors §2.2's "totals" object.
@@ -72,7 +73,7 @@ func (s *Server) handleCampaignReport(w http.ResponseWriter, r *http.Request, ca
 			withDetails(fieldDetail{Field: "campaign_id", Issue: issueMalformed}))
 		return
 	}
-	cur, cerr := parseReportCursor(r)
+	cur, cerr := parseReportCursor(r, userID, campaignID)
 	if cerr != nil {
 		s.fail(w, r, cerr)
 		return
@@ -342,7 +343,7 @@ func (s *Server) campaignItems(ctx context.Context, campaignID, userID string, c
 		// has-more comes from the extra row; the cursor comes from the last row we are RETURNING.
 		last := keys[pageSize-1]
 		items = items[:pageSize]
-		c := encodeReportCursor(last.createdAt.Format(time.RFC3339Nano), last.id)
+		c := encodeReportCursor(userID, campaignID, last.createdAt.Format(time.RFC3339Nano), last.id)
 		nextCursor = &c
 	}
 	return items, nextCursor, nil
@@ -434,22 +435,33 @@ type reportCursor struct {
 	ID        string
 }
 
-func parseReportCursor(r *http.Request) (*reportCursor, *apiError) {
+// reportCursorScope is what a campaign-report cursor is valid for: this route, this tenant, this campaign.
+// A cursor minted for any other scope is refused (pagecursor.ErrWrongScope) exactly like a malformed one.
+func reportCursorScope(userID, campaignID string) string {
+	return "platform.report|" + userID + "|" + campaignID
+}
+
+// parseReportCursor reads ?cursor= for the campaign report (Phase 3 close-out B2). A bad, malformed or
+// forged cursor — not base64url, not <timestamp>|<uuid>, a timestamp or id that would not survive the SQL
+// casts, or a cursor minted for ANOTHER tenant, campaign or route — is a 400 validation_failed with details
+// [cursor:malformed], decided here, BEFORE any query runs: it can never reach the database and so can never
+// be a 500, and nothing of the other scope's data is read. The caller cannot tell the two refusals apart
+// (the internal reason, logged against the request id, can).
+func parseReportCursor(r *http.Request, userID, campaignID string) (*reportCursor, *apiError) {
 	raw := r.URL.Query().Get("cursor")
 	if raw == "" {
 		return nil, nil
 	}
-	dec, err := base64.RawURLEncoding.DecodeString(raw)
+	pos, err := pagecursor.Decode(raw, reportCursorScope(userID, campaignID))
 	if err != nil {
-		return nil, newErr(codeValidationFailed, "cursor_malformed").
+		reason := "cursor_malformed"
+		if errors.Is(err, pagecursor.ErrWrongScope) {
+			reason = "cursor_wrong_scope"
+		}
+		return nil, newErr(codeValidationFailed, reason).
 			withDetails(fieldDetail{Field: "cursor", Issue: issueMalformed})
 	}
-	parts := strings.SplitN(string(dec), "|", 2)
-	if len(parts) != 2 || parts[1] == "" {
-		return nil, newErr(codeValidationFailed, "cursor_malformed").
-			withDetails(fieldDetail{Field: "cursor", Issue: issueMalformed})
-	}
-	return &reportCursor{CreatedAt: parts[0], ID: parts[1]}, nil
+	return &reportCursor{CreatedAt: pos.CreatedAt, ID: pos.ID}, nil
 }
 
 func parseReportPageSize(r *http.Request) int {
@@ -469,6 +481,6 @@ func parseReportPageSize(r *http.Request) int {
 	return n
 }
 
-func encodeReportCursor(createdAt, id string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(createdAt + "|" + id))
+func encodeReportCursor(userID, campaignID, createdAt, id string) string {
+	return pagecursor.Encode(reportCursorScope(userID, campaignID), createdAt, id)
 }

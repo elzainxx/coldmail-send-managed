@@ -21,7 +21,7 @@ advisory lock. It claims queued jobs, picks a healthy sending account, decrypts 
 credential, and pushes the job over mutual TLS to a **send_managed worker** (Node.js) — a dumb SMTP relay
 that ships no database driver and no KMS SDK, holds the credential in memory only, zeroes it on
 every exit from the send path, and reports the outcome back. Workers scale horizontally and are never publicly
-reachable. Everything tunable — 59 keys — is a seeded row in `send_managed.config`, changeable at
+reachable. Everything tunable — 62 keys — is a seeded row in `send_managed.config`, changeable at
 runtime with no redeploy; there are no hardcoded tuning constants. Full shape in
 [`Docs/architecture.md`](./Docs/architecture.md).
 

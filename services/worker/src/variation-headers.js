@@ -29,6 +29,11 @@ const ENCODINGS = ["quoted-printable", "base64"];
 // pure transform of the intermediate representation, like every other stage.
 function rotateEncoding(msg, jobId) {
   const encoding = pickSeeded(ENCODINGS, jobId, "encoding");
+  // A multipart/alternative message (the optional plain-text part, Phase 3 close-out B3) has NO top-level
+  // Content-Transfer-Encoding — a multipart entity must be 7bit/8bit/binary (RFC 2045 §6.4) — so the
+  // chosen encoding applies to its two PARTS only (serializeAlternative writes it on each). Adding the
+  // header at the top level would label the whole multipart quoted-printable/base64, which is invalid.
+  if (msg.alternative) return { ...msg, transferEncoding: encoding };
   return { ...msg, transferEncoding: encoding, headers: setHeader(msg.headers, "Content-Transfer-Encoding", encoding) };
 }
 
@@ -59,6 +64,17 @@ function boundaryFor(style, jobId) {
 
 function rotateBoundary(msg, jobId) {
   const style = pickSeeded(BOUNDARY_STYLES, jobId, "boundary_style");
+  if (msg.alternative) {
+    // The message is ALREADY a multipart/alternative (the optional plain-text part): there is nothing to
+    // wrap in a multipart/mixed envelope. The toggle varies the boundary's delimiter style and nothing
+    // else, so the parts, their types and their order are untouched. The candidate is a pure function of
+    // (style, jobId, n); the first one that does not occur inside either part is used (n = 0 in practice).
+    let boundary = boundaryFor(style, jobId);
+    for (let n = 1; n < 64 && [msg.body, msg.text].some((c) => String(c).includes(`--${boundary}`)); n++) {
+      boundary = boundaryFor(style, `${jobId}:${n}`);
+    }
+    return { ...msg, headers: setHeader(msg.headers, "Content-Type", `multipart/alternative; boundary="${boundary}"`), boundary };
+  }
   const boundary = boundaryFor(style, jobId);
   const headers = removeHeader(setHeader(msg.headers, "Content-Type", `multipart/mixed; boundary="${boundary}"`), "Content-Transfer-Encoding");
   return { ...msg, headers, boundary };

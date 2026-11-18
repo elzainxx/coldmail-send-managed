@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coldmail-send-managed/control/internal/workerproto"
+
 	// Embed the IANA tz database so daily_reset_timezone validation (time.LoadLocation) works
 	// regardless of the container's system tzdata. This is a data dependency, not a tuning
 	// constant (config-not-code is about behavioral dials; the tz table is a validation source).
@@ -144,6 +146,27 @@ func validateConfigValue(key, valueType string, value json.RawMessage) *apiError
 		// (a value in minutes or in hours typed as seconds) from failing every retrying job at once.
 		if n, ok := asInt(value); !ok || n < 60 || n > 2592000 {
 			return typeErr(key, issueOutOfRange, "config_job_failed_max_age_sec_out_of_range")
+		}
+	case "worker_reconnect_base_ms":
+		// send_managed_0029 (Phase 3 close-out B1): the first wait of the worker's capped exponential reconnect
+		// backoff. 10 ms to 60 s. The 10 ms floor is the MINIMUM LEGAL value (a harness runs 50 ms); below it a
+		// fleet would redial in a tight loop. Rejected, never clamped.
+		if n, ok := asInt(value); !ok || n < workerproto.ReconnectBaseMinMS || n > workerproto.ReconnectBaseMaxMS {
+			return typeErr(key, issueOutOfRange, "config_worker_reconnect_base_ms_out_of_range")
+		}
+	case "worker_reconnect_cap_ms":
+		// send_managed_0029: the largest un-jittered wait of the reconnect backoff. 10 ms to 10 minutes. There
+		// is deliberately NO cross-key check against the base: a base above the cap simply makes every wait the
+		// cap (the delay is min(cap, base*2^(n-1))), which is well defined, so the two keys can be changed in
+		// either order without an ordering violation.
+		if n, ok := asInt(value); !ok || n < workerproto.ReconnectCapMinMS || n > workerproto.ReconnectCapMaxMS {
+			return typeErr(key, issueOutOfRange, "config_worker_reconnect_cap_ms_out_of_range")
+		}
+	case "worker_reconnect_jitter_pct":
+		// send_managed_0029: the jitter added on top of each wait, as a percentage of it. 0 to 100. 0 is LEGAL
+		// (no jitter) and is a real value that reaches the worker as 0.
+		if n, ok := asInt(value); !ok || n < workerproto.ReconnectJitterMinPct || n > workerproto.ReconnectJitterMaxPct {
+			return typeErr(key, issueOutOfRange, "config_worker_reconnect_jitter_pct_out_of_range")
 		}
 	case "status_score_weights":
 		// Phase 5 §3.2 inner shape: all five keys present, weights/params numeric and non-negative,

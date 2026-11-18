@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/workerlink.js && node --check src/creds.js && node --check src/stream.js && node --check src/smtp.js && node --check src/variation.js && node --check src/variation-seed.js && node --check src/variation-content.js && node --check src/variation-headers.js && node --check src/mime-headers.js && node --check src/mime-codec.js && node --check src/assemble.js"
+    "check": "node --check src/index.js && node --check src/workerlink.js && node --check src/creds.js && node --check src/stream.js && node --check src/smtp.js && node --check src/variation.js && node --check src/variation-seed.js && node --check src/variation-content.js && node --check src/variation-headers.js && node --check src/mime-headers.js && node --check src/mime-codec.js && node --check src/assemble.js && node --check src/reconnect.js"
   },
   "comment_dependencies": "INTENTIONALLY EMPTY. The worker ships NO database driver and NO KMS SDK — the no-DB/no-KMS boundary (CLAUDE.md Rule 6) is structural. mTLS uses Node's built-in https/tls. Adding 'pg', a KMS SDK, or any DB client here is a review-blocking defect.",
   "dependencies": {}

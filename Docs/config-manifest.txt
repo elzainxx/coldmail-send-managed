@@ -2,8 +2,8 @@
 # One key name per line. The CI config_drift gate asserts:
 #   live send_managed.config key set  ==  this manifest  ==  the config-reference.md table.
 # Each config-seeding migration (Phase 1's send_managed_0010 onward) appends its keys here in the
-# SAME change, so the gate grows monotonically. Current total: 59 =
-#   14 (0010) + 3 (0017) + 2 (0018) + 6 (0019) + 17 (0020) + 12 (0021 & 0023) + 1 (0025) + 2 (0026) + 2 (0028).
+# SAME change, so the gate grows monotonically. Current total: 62 =
+#   14 (0010) + 3 (0017) + 2 (0018) + 6 (0019) + 17 (0020) + 12 (0021 & 0023) + 1 (0025) + 2 (0026) + 2 (0028) + 3 (0029).
 # Phase 9.5's headline "53 keys" was written down before send_managed_0023 added a twelfth key to that
 # group, which is why 53 + 1 + 2 does not reach 57. THE COUNT IN A COMMENT IS NOT THE GATE: the gate is
 # the diff below against the live key set AND Docs/config-reference.md, all three of which must match
@@ -113,3 +113,14 @@ retention_mode
 # Docs/config-reference.md carries the operator descriptions; internal/dispatch/attempts_cap.go the logic.
 job_max_failed_attempts
 job_failed_max_age_sec
+
+# Phase 3 close-out B1 (the worker never gives up) — send_managed_0029 (+3 keys). The Node worker used to make
+# about thirty reconnect attempts to the Control and then exit; it now reconnects for ever with a capped
+# exponential backoff plus jitter (services/worker/src/reconnect.js). These are the three numbers that shape
+# the wait: wait(n) = min(cap, base * 2^(n-1)) * (1 + jitter * u). The worker has no database, so the Control
+# reads them and delivers them on register_ack (internal/workerlink/stream.go readReconnectDials). Defaults
+# 1000 ms / 30000 ms / 20 %; legal ranges 10-60000 / 10-600000 / 0-100 (minimum legal 10 ms, 10 ms, 0 %).
+# Docs/config-reference.md carries the operator descriptions.
+worker_reconnect_base_ms
+worker_reconnect_cap_ms
+worker_reconnect_jitter_pct

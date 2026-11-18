@@ -802,8 +802,12 @@ Then read the worker's own log on its host. Useful lines, and what they mean:
 |---|---|
 | `registered over mTLS stream` | Healthy. It is connected and waiting for work. |
 | `control stream closed; reconnecting (outcome buffer retained)` | Normal reconnect. It kept its outcomes. No action. |
-| `still cannot register after N attempts, but M unacked outcome(s) remain inside the buffer TTL — continuing to retry rather than exiting` | It is deliberately staying alive to protect buffered outcomes. Let it. Fix the Control-side reachability. |
-| `could not (re)register within the retry budget; exiting for restart` | It gave up and expects its supervisor to restart it. Almost always: the Control was not reachable, or the `send_managed.boxes` row / token is wrong. |
+| `control unreachable or register refused (<reason>); N consecutive failed attempt(s); next attempt in X ms; the worker keeps retrying until it is shut down` | The Control is down or unreachable, or refused the registration (`register rejected: unauthenticated`: the `send_managed.boxes` row or the token is wrong, or the worker was decommissioned). Logged at the 1st failed attempt and then every 10th, so the log cannot flood. **The worker does not exit and needs no restart**: it retries for ever (capped exponential backoff + jitter, `worker_reconnect_*`) and registers by itself as soon as it can. Fix the Control-side reachability or the box row. |
+| `reconnected after N failed attempt(s); unacked outcomes are replayed` | The outage is over. Buffered outcomes were replayed; claimed work follows the Control's normal lease/heartbeat rules. No action. |
+| `registered over mTLS stream; ... reconnect backoff in effect: base A ms, cap B ms, jitter C %` | Healthy, and states which reconnect dials this worker will use (its `WORKER_RECONNECT_*` environment variables if set, else what the Control delivered, else the built-in defaults). |
+
+(The lines `still cannot register after N attempts ... continuing to retry` and `could not (re)register within the retry
+budget; exiting for restart` no longer exist: the worker has no attempt limit and no give-up exit.)
 
 ### When a human should actually intervene
 

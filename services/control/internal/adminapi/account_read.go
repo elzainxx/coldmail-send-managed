@@ -32,7 +32,7 @@ func (s *Server) handleAccountGet(w http.ResponseWriter, r *http.Request) {
 // item is the §2.1 object — no secret.
 func (s *Server) handleAccountList(w http.ResponseWriter, r *http.Request) {
 	limit := parseLimit(r)
-	cur, cerr := parseCursor(r)
+	cur, cerr := parseCursor(r, cursorScopeAccounts)
 	if cerr != nil {
 		s.fail(w, r, cerr)
 		return
@@ -123,7 +123,7 @@ func (s *Server) handleAccountList(w http.ResponseWriter, r *http.Request) {
 	if len(items) > limit {
 		last := items[limit-1]
 		items = items[:limit]
-		c := encodeCursor(last.cursorTS, last.ID)
+		c := encodeCursor(cursorScopeAccounts, last.cursorTS, last.ID)
 		nextCursor = &c
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor})

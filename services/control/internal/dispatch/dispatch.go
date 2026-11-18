@@ -236,7 +236,7 @@ SET state = 'assigned',
     lease_expires_at = NOW() + make_interval(secs => $2),
     updated_at = NOW()
 WHERE id IN (SELECT id FROM claimed)
-RETURNING id, user_id, campaign_id, recipient_email, rendered_subject, rendered_body, reply_to`
+RETURNING id, user_id, campaign_id, recipient_email, rendered_subject, rendered_body, rendered_text, reply_to`
 
 // claimedJob is the row the claim returns.
 type claimedJob struct {
@@ -246,6 +246,7 @@ type claimedJob struct {
 	recipient  string
 	subject    string
 	body       string
+	text       *string // rendered_text: the optional plain-text alternative (NULL when the platform wrote none)
 	replyTo    *string
 }
 
@@ -401,6 +402,7 @@ func (d *Dispatcher) resolveAndPush(ctx context.Context, job claimedJob, workerI
 			ReplyTo:     replyTo,
 			Subject:     job.subject,
 			Body:        job.body,
+			Text:        sendText(job.text),
 			Headers:     headers,
 		},
 		SMTP: workerproto.SMTP{
@@ -480,7 +482,7 @@ func (d *Dispatcher) claimOne(ctx context.Context, workerID string, jobMaxProces
 	}
 	var j claimedJob
 	err = tx.QueryRow(ctx, claimQuery, workerID, jobMaxProcessingTimeSec).
-		Scan(&j.id, &j.userID, &j.campaignID, &j.recipient, &j.subject, &j.body, &j.replyTo)
+		Scan(&j.id, &j.userID, &j.campaignID, &j.recipient, &j.subject, &j.body, &j.text, &j.replyTo)
 	if err == pgx.ErrNoRows {
 		return claimedJob{}, false, tx.Commit(ctx) // nothing queued; commit the (no-op) tx
 	}

@@ -178,7 +178,14 @@ func (s *StreamServer) handle(conn net.Conn) {
 	// consumes it for its outcome-buffer bound (config-not-code). A read failure is non-fatal — the
 	// worker falls back to its bootstrap default; we never block registration on it.
 	ttlSec := s.readOutcomeBufferTTLSec()
-	if err := s.writeFrame(bc, workerproto.RegisterAck{Type: workerproto.TypeRegisterAck, RequestID: reg.RequestID, Accepted: true, OutcomeBufferTTLSec: ttlSec}); err != nil {
+	// Deliver the three seeded reconnect dials the same way (Phase 3 close-out B1): the worker never gives up
+	// reconnecting, and these set how it waits between attempts. Also non-fatal: an unreadable or out-of-range
+	// row is simply not delivered and the worker keeps its environment override / built-in default.
+	baseMS, capMS, jitterPct := s.readReconnectDials()
+	if err := s.writeFrame(bc, workerproto.RegisterAck{
+		Type: workerproto.TypeRegisterAck, RequestID: reg.RequestID, Accepted: true, OutcomeBufferTTLSec: ttlSec,
+		ReconnectBaseMS: baseMS, ReconnectCapMS: capMS, ReconnectJitterPct: jitterPct,
+	}); err != nil {
 		return
 	}
 	log.Printf("workerlink stream: worker registered id=%q (token verified, mTLS client cert)", reg.WorkerID)
@@ -381,6 +388,40 @@ func (s *StreamServer) readOutcomeBufferTTLSec() int {
 		return 0
 	}
 	return *wrap.V
+}
+
+// readReconnectDials reads the three seeded worker reconnect dials (worker_reconnect_base_ms,
+// worker_reconnect_cap_ms, worker_reconnect_jitter_pct; Phase 3 close-out B1) to deliver to the DB-less worker
+// on register_ack. Each is returned as a pointer: nil = "do not deliver this one" — the row is unreadable,
+// not an integer, or outside its legal range (workerproto.Reconnect*), in which case the worker keeps its
+// environment override or built-in default. A value is NEVER clamped into range (CLAUDE.md Rule 1: reject, do
+// not auto-correct). Never blocks registration.
+func (s *StreamServer) readReconnectDials() (baseMS, capMS, jitterPct *int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	read := func(key string, lo, hi int) *int {
+		var raw []byte
+		if err := s.db.QueryRow(ctx, `SELECT value FROM send_managed.config WHERE key = $1`, key).Scan(&raw); err != nil {
+			log.Printf("workerlink stream: %s unreadable (%v) — worker keeps its own default", key, err)
+			return nil
+		}
+		var wrap struct {
+			V *int `json:"v"`
+		}
+		if err := json.Unmarshal(raw, &wrap); err != nil || wrap.V == nil {
+			log.Printf("workerlink stream: %s is not an integer — worker keeps its own default", key)
+			return nil
+		}
+		if *wrap.V < lo || *wrap.V > hi {
+			log.Printf("workerlink stream: %s=%d is outside %d..%d — not delivered, worker keeps its own default", key, *wrap.V, lo, hi)
+			return nil
+		}
+		return wrap.V
+	}
+	baseMS = read("worker_reconnect_base_ms", workerproto.ReconnectBaseMinMS, workerproto.ReconnectBaseMaxMS)
+	capMS = read("worker_reconnect_cap_ms", workerproto.ReconnectCapMinMS, workerproto.ReconnectCapMaxMS)
+	jitterPct = read("worker_reconnect_jitter_pct", workerproto.ReconnectJitterMinPct, workerproto.ReconnectJitterMaxPct)
+	return baseMS, capMS, jitterPct
 }
 
 // touchHeartbeat refreshes last_heartbeat_at and returns a stale worker to active (§3.2).

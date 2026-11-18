@@ -26,6 +26,7 @@ package adminapi
 // report names each with its verdict.)
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -305,7 +306,9 @@ func TestListings_KeysetControl_TheOldSecondTruncatedCursorIsCaught(t *testing.T
 			if !strings.HasSuffix(createdAt, "05Z") || strings.Contains(createdAt, ".") {
 				t.Fatalf("%s: the serialized created_at is %q, expected the second-truncated form this control depends on", lc.name, createdAt)
 			}
-			return encodeCursor(createdAt, id)
+			// The OLD construction, byte for byte: a legacy two-field cursor (still accepted, see pagecursor) built from the
+			// second-truncated created_at the response carries.
+			return base64.RawURLEncoding.EncodeToString([]byte(createdAt + "|" + id))
 		}
 		pages, terminated := e.walkList(t, base, 2, 8, oldWay)
 		v := checkListing(pages, want, 2, terminated)

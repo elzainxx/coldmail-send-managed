@@ -5,9 +5,9 @@ Authoritative source: **Phase 9 §4** (`history/phase-9-polish-and-documentation
 grew from 14 to 17 keys post-Chunk-5). This file is the checked-in mirror, verified by the
 CI `config_drift` gate against the live `send_managed.config` seeds.
 
-**Current total: 59 keys** — 14 (`0010`) + 3 (`0017`) + 2 (`0018`) + 6 (`0019`) + 17 (`0020`) +
+**Current total: 62 keys** — 14 (`0010`) + 3 (`0017`) + 2 (`0018`) + 6 (`0019`) + 17 (`0020`) +
 12 (`0021`+`0023`) + 1 (`0025`, fix-plan item 12) + 2 (`0026`, fix-plan item 13) + 2 (`0028`, the
-attempt cap, M2-G2). This number is a
+attempt cap, M2-G2) + 3 (`0029`, the worker reconnect dials, Phase 3 close-out B1). This number is a
 convenience for the reader, not the gate: `config_drift` diffs the live key set against
 `config-manifest.txt` and against this file's tables, so a stale count here is a doc bug while a stale
 key is a build failure.
@@ -17,7 +17,7 @@ key is a build failure.
 `send_managed.config` is created in Phase 1 (`send_managed_0010`), seeding the **14 foundation keys** below
 (Phase 9 §4.1). Later phases append their keys (Phase 5 `send_managed_0017`, Phase 6 `send_managed_0018`,
 Phase 7 `send_managed_0019`, Phase 8 `send_managed_0020`, Phase 9.5 `send_managed_0021`, then the fix-plan
-alignment keys `send_managed_0025`/`send_managed_0026`, then the attempt-cap keys `send_managed_0028`) growing to the current 59-key
+alignment keys `send_managed_0025`/`send_managed_0026`, then the attempt-cap keys `send_managed_0028`, then the worker reconnect dials `send_managed_0029`) growing to the current 62-key
 total. The drift gate diffs the **phase-aware manifest** (`config-manifest.txt`) against the
 live `send_managed.config` key set AND this table — all three must match, which is what makes "no
 hardcoded tuning constant" structurally checkable. `default_value` is never mutated.
@@ -332,7 +332,9 @@ promoting one to a real dial is a future additive migration, not a silent defaul
 | `internal/adminapi/health_alerts.go` `webhookHTTPClient` timeout / `webhookMaxAttempts` | 5s / 3 attempts | Bounds an UNTRUSTED outbound egress (`alert_webhook_url`, Rule 5): a slow or dead receiver must never hold a health-endpoint response open or retry unboundedly. After 3 attempts the alert is dropped, deliberately — the health endpoint remains the current-truth source, so a lost POST costs a notification, never state. Not a dial: an operator tuning this would be tuning how long their own monitoring stack may stall the admin API. |
 | `cmd/control/main.go` shutdown grace period | 10s | A drain-on-SIGTERM bound, not a runtime behavior a campaign/operator would tune per-deployment. |
 | `services/worker/src/smtp.js` QUIT-after-DATA timeout | 2000ms | QUIT is best-effort (the send already succeeded); this bound only affects how long the worker waits before moving on, never the delivery outcome. |
-| `services/worker/src/index.js` register-retry cap/interval | 30 attempts / 1000ms | Startup-only bounded retry while the Control may still be coming up — a deployment-ordering concern, not a per-campaign dial. |
+| `services/worker/src/stream.js` `registerTimeoutMs` | 30s | One reconnect ATTEMPT's register handshake: a Control that accepts the connection but never answers `register` is a failed attempt (the worker then waits out its backoff and tries again) instead of a worker that waits on it for ever. A structural bound on a single attempt, like the register-handshake deadline on the Control side; not a dial. The worker's *reconnect* behaviour (how often it retries) is a dial: see `worker_reconnect_*` below. It no longer has an attempt limit: **the 30-attempt register-retry cap that used to sit in this table was removed by `send_managed_0029`** — the worker reconnects for ever. |
+| `services/worker/src/reconnect.js` `shouldLogFailure` | the 1st failed attempt, then every 10th | Bounds the worker's LOG rate during an outage so a Control that is down for a weekend cannot flood the log; it does not bound the attempts (there is no limit on those) and changes no behaviour. |
+| `db/migrations/send_managed_0030_jobs_rendered_text.up.sql` `jobs_rendered_text_size_check` | 1048576 bytes (1 MiB) | The most plain-text alternative (`public.job_items.rendered_text` → `send_managed.jobs.rendered_text`) one message may carry; a larger one is refused by `POST /v1/run` with `400 validation_failed` and writes nothing. A structural size guard on a platform-supplied column (the same number as the admin API's body cap), not an operator dial. The HTML body has no such limit, unchanged. |
 | `services/worker/src/variation-headers.js` `HEADER_ORDERS` (the gmail/outlook/apple/thunderbird client-style header-position tables) | 4 fixed orderings | Phase 8 toggle 9 (`variation_header_style`) selects WHICH table to apply via the seeded config *enum* (`none`/`gmail`/`outlook`/`apple`/`thunderbird`/`random`) — the table CONTENTS (which header goes in which position for a given real mail client) are an external, empirically-observed fact about how those clients format mail, not a tunable rate/threshold/timeout. Making the header orders themselves config-driven would let an operator invent a fifth "client style" with no matching real client — the dial that exists (`variation_header_style`) is the correct one; the tables it selects between are reference data, the same class as the IANA timezone database `daily_reset_timezone` validates against. |
 
 See `Docs/history/open-decisions.md`'s Phase 4 closeout ("hardcoded-timeout triage") for the full
@@ -376,3 +378,45 @@ effectively disable it, raise `job_max_failed_attempts` (1000) and `job_failed_m
 (2) A job that already holds more than the new cap when the dial is lowered is failed on its **next** failed
 attempt, not retroactively. (3) The cap composes with, and does not replace, account health: auto-quarantine
 and auto-pause still act on the account at every failed attempt; the cap acts on the **job**.
+
+## The worker reconnect dials (+3 keys, `send_managed_0029`) — Phase 3 close-out B1: the worker never gives up
+
+**The gap this closes.** The Node worker used to make about thirty one-second attempts to reach (and register
+with) the Control and then **exit 1** for its supervisor to restart it; an outage longer than that needed the
+worker restarted by hand (outcomes it still held were kept past the thirty only while inside their TTL). It now
+reconnects **for ever** — until its own SIGTERM/SIGINT — and the three dials below shape the wait between attempts.
+
+**The wait.** `wait(n) = min(cap, base × 2^(n−1)) × (1 + jitter × u)`, `n` = 1 for the first failed attempt since the
+last success, `u` uniform in [0, 1), `jitter` = `worker_reconnect_jitter_pct` / 100. So every wait is at least
+`min(cap, base × 2^(n−1))` and **never exceeds `cap × (1 + jitter)`** (36 s at the defaults). The counter resets to 1 the
+moment a connection registers; a connection that registers and then drops is followed by one `base`-sized wait
+before the redial, so a Control that accepts and immediately drops cannot be hammered in a tight loop. A *refused*
+register (an unknown or decommissioned worker, or one started before its `send_managed.boxes` row exists) is retried
+on the same schedule: the worker stays up and retries quietly instead of exiting. Each failed attempt is logged at a
+bounded rate (the first, then every 10th, never a secret) and recovery is logged
+(`reconnected after N failed attempt(s)`). **Work claimed before or during an outage is unchanged** (this change
+touches none of it): an outcome the worker already produced stays in its in-memory buffer and is replayed on the next
+`register_ack` until the Control acks it or the buffer TTL (`box_outcome_buffer_ttl_sec`) drops it; a job the
+Control had pushed but never heard back about is reclaimed by the Control's own lease / heartbeat rules
+(`job_max_processing_time_sec`, `heartbeat_missed_threshold`) and re-sent, with the duplicate window those rules
+already document. A worker that is waiting out an outage holds no job and sends nothing.
+
+**How a worker gets them.** The worker has no database. The Control reads the three rows on every worker
+registration and delivers them in `register_ack` (`reconnect_base_ms`, `reconnect_cap_ms`, `reconnect_jitter_pct`; each
+omitted when the row is unreadable or outside its range, which leaves that dial to the worker's own value); the worker
+adopts them for every wait after that, so a change takes effect at each worker's **next registration**, not on its
+running connection. Precedence on the worker: **environment variable** (`WORKER_RECONNECT_BASE_MS`,
+`WORKER_RECONNECT_CAP_MS`, `WORKER_RECONNECT_JITTER_PCT`; when set, an out-of-range value is a startup error, exit 2)
+→ the value the Control delivered → the built-in default (1000 / 30000 / 20, the seeded defaults). A test harness sets the
+environment variables (e.g. 50 and 200) so the worker makes more than thirty attempts in seconds from its very first
+attempt.
+
+**Ranges (inclusive; a value outside is REJECTED by the admin `PUT` and by the worker, never clamped).** Base 10–60000 ms,
+cap 10–600000 ms, jitter 0–100 %. The **minimum legal values are 10 ms, 10 ms and 0 %**. There is no ordering
+constraint between base and cap: a base above the cap makes every wait the cap.
+
+| key | default_value | value_type | seeding migration | description |
+|-----|---------------|-----------|-------------------|-------------|
+| `worker_reconnect_base_ms` | `{"v":1000}` | integer | send_managed_0029 | The first wait of the worker's reconnect backoff, in milliseconds; each further consecutive failure doubles it up to `worker_reconnect_cap_ms`. Range **10–60000** (minimum legal value 10). **1000 by default.** Delivered to the worker on `register_ack`; `WORKER_RECONNECT_BASE_MS` overrides it on one worker. |
+| `worker_reconnect_cap_ms` | `{"v":30000}` | integer | send_managed_0029 | The largest un-jittered wait between two reconnect attempts, in milliseconds, however long the Control stays down; with jitter no wait exceeds `cap × (1 + jitter)`. Also the longest a recovered Control waits for a worker that was waiting out the outage. Range **10–600000** (minimum legal value 10). **30000 (30 s) by default.** `WORKER_RECONNECT_CAP_MS` overrides it on one worker. |
+| `worker_reconnect_jitter_pct` | `{"v":20}` | integer | send_managed_0029 | Percentage of each wait that is added at random (`wait × (1 + jitter × u)`), so workers that lost the same Control together do not redial together. Range **0–100**; `0` (no jitter) is legal and reaches the worker as `0`. **20 by default.** `WORKER_RECONNECT_JITTER_PCT` overrides it on one worker. |

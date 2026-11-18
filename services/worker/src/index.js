@@ -1,21 +1,39 @@
-// SendManaged Worker entrypoint (Phase 3 — the minimal send path; Phase 7 — outcome buffering). The worker
-// dials the Control over mTLS, holds a persistent control stream (src/stream.js), registers
-// (id + token), heartbeats, and — when the Control pushes a job — runs the full SMTP session itself
-// (src/smtp.js). The worker has NO DB access and NO KMS: it receives an already-decrypted credential
-// per send, holds it in memory only, and zeroes it after the session (CLAUDE.md Rule 6; Phase 3
-// §3.4/§4.4).
+// SendManaged Worker entrypoint (Phase 3 — the minimal send path; Phase 7 — outcome buffering; Phase 3
+// close-out B1 — the worker never gives up). The worker dials the Control over mTLS, holds a persistent
+// control stream (src/stream.js), registers (id + token), heartbeats, and — when the Control pushes a job —
+// runs the full SMTP session itself (src/smtp.js). The worker has NO DB access and NO KMS: it receives an
+// already-decrypted credential per send, holds it in memory only, and zeroes it after the session
+// (CLAUDE.md Rule 6; Phase 3 §3.4/§4.4).
 //
-// Phase 7 §1.3 (P7-4): on a stream drop the worker now RECONNECTS IN-PROCESS (preserving its in-memory
-// outcome buffer) and REPLAYS any unacked outcomes on reconnect, rather than exiting. This is the
-// minimum P7-4 contract — in-memory retention across a STREAM reconnect (the common blip / Control-
-// restart case). Surviving a worker PROCESS restart via on-disk buffer persistence is P7-6 (FLAGGED,
-// NOT built). A SIGTERM/SIGINT still exits cleanly.
+// Phase 7 §1.3 (P7-4): on a stream drop the worker RECONNECTS IN-PROCESS (preserving its in-memory
+// outcome buffer) and REPLAYS any unacked outcomes on reconnect, rather than exiting.
+//
+// B1: and it does so FOR EVER. There is no attempt limit and no "could not register, exiting for restart"
+// path: a failed dial or a refused register is retried with a capped exponential backoff plus jitter
+// (src/reconnect.js) until the worker is shut down. A SIGTERM/SIGINT still exits cleanly, at once, even in
+// the middle of a backoff wait.
 
 import { WorkerStream } from "./stream.js";
+import { superviseConnection, resolveDials, isLegalDial, RECONNECT_LIMITS } from "./reconnect.js";
 
 function env(k, def) {
   const v = process.env[k];
   return v === undefined || v === "" ? def : v;
+}
+
+// envDial reads one optional WORKER_RECONNECT_* override. Unset -> undefined (the Control-delivered value,
+// then the built-in default, applies). Set but not a legal integer in the dial's range -> a startup
+// configuration error (exit 2, like a missing WORKER_ID), never a silent clamp.
+function envDial(name, key) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return undefined;
+  const n = Number(raw);
+  if (!isLegalDial(key, n)) {
+    const [lo, hi] = RECONNECT_LIMITS[key];
+    console.error(`worker: ${name} must be an integer from ${lo} to ${hi} (got "${raw}")`);
+    process.exit(2);
+  }
+  return n;
 }
 
 async function main() {
@@ -25,6 +43,15 @@ async function main() {
     console.error("worker: WORKER_ID and WORKER_TOKEN are required (out-of-band provisioned)");
     process.exit(2);
   }
+
+  // Optional operator/harness override of the reconnect dials. When set it WINS over what the Control
+  // delivers on register_ack (worker_reconnect_base_ms / _cap_ms / _jitter_pct), so a harness can run the
+  // worker at 50 ms / 200 ms from its very first attempt without touching the Control's config.
+  const envDials = {
+    baseMs: envDial("WORKER_RECONNECT_BASE_MS", "baseMs"),
+    capMs: envDial("WORKER_RECONNECT_CAP_MS", "capMs"),
+    jitterPct: envDial("WORKER_RECONNECT_JITTER_PCT", "jitterPct"),
+  };
 
   const stream = new WorkerStream({
     host: env("CONTROL_HOST", "control"),
@@ -48,66 +75,28 @@ async function main() {
     },
   });
 
+  const shutdownController = new AbortController();
   const shutdown = () => {
     console.log(`worker ${workerId}: shutdown`);
+    shutdownController.abort(); // ends a backoff wait at once
     stream.stop();
     process.exit(0);
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 
-  // connectOnce dials + registers with bounded retry. SAFETY BOUND (Phase 4 closeout triage,
-  // Docs/history/open-decisions.md): a startup-ordering retry, not a runtime dial — a worker that can't register
-  // within ~30 attempts is a deployment-ordering problem, not something an operator tunes.
-  // A retry attempt is ~1s, so the budget is ~30s of dialling. That bound is a STARTUP-ORDERING
-  // guard, and it must not be allowed to destroy buffered outcomes: exiting throws away the
-  // in-memory buffer, and §1.3 says an outcome is dropped only on "failure to reconnect within the
-  // TTL" (900s default) — not after 30s. So whenever unacked outcomes are still inside their TTL,
-  // connectOnce keeps retrying past the budget instead of returning failure. Still bounded: entries
-  // age out via pendingOutcomeCount()'s prune, after which the budget applies again and the worker exits
-  // for the orchestrator to restart it.
-  const connectOnce = async () => {
-    for (let attempt = 1; ; attempt++) {
-      if (stream.stopped) return false;
-      try {
-        await stream.start();
-        console.log(`worker ${workerId}: registered over mTLS stream; awaiting pushed jobs (buffered outcomes replayed on connect)`);
-        return true;
-      } catch (e) {
-        if (attempt >= 30) {
-          const pending = stream.pendingOutcomeCount();
-          if (pending === 0) return false;
-          if (attempt % 30 === 0) {
-            console.error(`worker ${workerId}: still cannot register after ${attempt} attempts, but ${pending} unacked outcome(s) remain inside the buffer TTL — continuing to retry rather than exiting and losing them (§1.3)`);
-          }
-        } else {
-          console.log(`worker ${workerId}: connect attempt ${attempt} not ready (${e.message}); retrying`);
-        }
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-    }
-  };
-
-  // Supervise loop (Phase 7 §1.3, P7-4): on a stream drop, RECONNECT IN-PROCESS — the same WorkerStream
-  // instance is reused, so its in-memory outcome buffer survives the drop and unacked outcomes are
-  // replayed on the next register_ack. We do NOT exit on a mere stream close anymore (that would lose
-  // the buffer and defeat the no-duplicate guarantee). Only a failed initial/repeated connect (Control
-  // unreachable for the whole retry budget) exits non-zero for the orchestrator to restart us.
-  while (!stream.stopped) {
-    const ok = await connectOnce();
-    if (!ok) {
-      console.error(`worker ${workerId}: could not (re)register within the retry budget; exiting for restart`);
-      process.exit(1);
-    }
-    // Wait for THIS connection to close, then loop to reconnect (buffer intact).
-    await new Promise((resolve) => {
-      if (!stream.sock) return resolve();
-      stream.sock.once("close", () => {
-        if (!stream.stopped) console.error(`worker ${workerId}: control stream closed; reconnecting (outcome buffer retained)`);
-        resolve();
-      });
-    });
-  }
+  // The supervise loop (reconnect.js) dials, registers, waits for the connection to close, and redials —
+  // for as long as the worker runs. The SAME WorkerStream instance is reused across every reconnect, so its
+  // in-memory outcome buffer survives and unacked outcomes are replayed on the next register_ack (P7-4).
+  // It returns only when the worker is stopping.
+  await superviseConnection({
+    stream,
+    // Env override, then what the Control delivered on the last register_ack, then the built-in default.
+    getDials: () => resolveDials(envDials, stream.deliveredReconnectDials),
+    log: (line) => console.log(`worker ${workerId}: ${line}`),
+    signal: shutdownController.signal,
+  });
+  process.exit(0);
 }
 
 main().catch((e) => {

@@ -1,10 +1,11 @@
 package adminapi
 
 import (
-	"encoding/base64"
+	"errors"
 	"net/http"
 	"strconv"
-	"strings"
+
+	"github.com/coldmail-send-managed/control/internal/pagecursor"
 )
 
 // Cursor pagination (§1.4): keyset on (created_at, id) — stable under concurrent inserts (no
@@ -42,27 +43,40 @@ type cursor struct {
 	ID        string
 }
 
-// parseCursor decodes ?cursor=. Returns (nil, nil) when absent, or (nil, apiError) if malformed.
-func parseCursor(r *http.Request) (*cursor, *apiError) {
+// The scope a list route's cursor is valid for (pagecursor): a cursor minted by one of these routes is refused
+// by every other, and the account-events cursor is bound to ITS account as well.
+const (
+	cursorScopeAccounts = "admin.accounts"
+	cursorScopePools    = "admin.pools"
+)
+
+func cursorScopeAccountEvents(accountID string) string { return "admin.account_events|" + accountID }
+
+// parseCursor decodes ?cursor= for the list route whose scope is given (Phase 3 close-out B2). Returns
+// (nil, nil) when absent. A bad, malformed or forged cursor — not base64url, not <timestamp>|<uuid>, a
+// timestamp or id that would not survive the SQL casts, or a cursor minted for ANOTHER route or account — is
+// a 400 validation_failed with details [cursor:malformed], decided before any query runs: it can never be a
+// 500, and no row is read for it. The two refusals look identical to the caller; the internal reason (logged
+// against the request id) tells them apart.
+func parseCursor(r *http.Request, scope string) (*cursor, *apiError) {
 	raw := r.URL.Query().Get("cursor")
 	if raw == "" {
 		return nil, nil
 	}
-	dec, err := base64.RawURLEncoding.DecodeString(raw)
+	pos, err := pagecursor.Decode(raw, scope)
 	if err != nil {
-		return nil, newErr(codeValidationFailed, "cursor_malformed").
+		reason := "cursor_malformed"
+		if errors.Is(err, pagecursor.ErrWrongScope) {
+			reason = "cursor_wrong_scope"
+		}
+		return nil, newErr(codeValidationFailed, reason).
 			withDetails(fieldDetail{Field: "cursor", Issue: issueMalformed})
 	}
-	parts := strings.SplitN(string(dec), "|", 2)
-	if len(parts) != 2 || parts[1] == "" {
-		return nil, newErr(codeValidationFailed, "cursor_malformed").
-			withDetails(fieldDetail{Field: "cursor", Issue: issueMalformed})
-	}
-	return &cursor{CreatedAt: parts[0], ID: parts[1]}, nil
+	return &cursor{CreatedAt: pos.CreatedAt, ID: pos.ID}, nil
 }
 
 // encodeCursor builds the opaque next_cursor from the LAST RETURNED item's keyset (the page's own final
-// row — never the extra row fetched only to learn whether another page exists).
-func encodeCursor(createdAt, id string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(createdAt + "|" + id))
+// row — never the extra row fetched only to learn whether another page exists), bound to the route's scope.
+func encodeCursor(scope, createdAt, id string) string {
+	return pagecursor.Encode(scope, createdAt, id)
 }

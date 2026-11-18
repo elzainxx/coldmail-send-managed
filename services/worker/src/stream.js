@@ -26,6 +26,7 @@ import fs from "node:fs";
 import { MemoryCredential } from "./creds.js";
 import { runSmtpSession, SMTPError } from "./smtp.js";
 import { assembleDataBytes } from "./assemble.js";
+import { isLegalDial } from "./reconnect.js";
 
 // defaultDial is the PRODUCTION transport: a mutual-TLS connection to the Control (§3.3). It is the
 // only transport the worker ever uses in production. A test may inject an alternative dial (o.dial) to
@@ -47,6 +48,8 @@ function defaultDial(o, tlsMaterial, onSecure) {
 }
 
 export class WorkerStream {
+  #resolveStopped = null;
+
   /**
    * @param {object} o
    * @param {string} o.host  Control host
@@ -81,6 +84,15 @@ export class WorkerStream {
     // dial is the transport factory: production uses defaultDial (mutual-TLS). Tests may inject one
     // to exercise the real read loop/buffer/replay over a plain socket (TLS proven elsewhere).
     this.dial = o.dial || defaultDial;
+    // registerTimeoutMs bounds ONE attempt's handshake: a Control that accepts the TCP/TLS connection but
+    // never answers `register` (wedged, or a half-open path) must count as a failed attempt so the
+    // reconnect supervisor (reconnect.js) retries, instead of the worker waiting on it for ever. A
+    // structural bound, not an operator dial (like the 1024-entry buffer cap below); tests shorten it.
+    this.registerTimeoutMs = o.registerTimeoutMs || 30_000;
+    // The reconnect dials the Control delivered on the last register_ack ({baseMs, capMs, jitterPct}
+    // fields, each only when the frame carried a legal one) — read by index.js's getDials() before every
+    // backoff wait. Empty until the first register_ack. See reconnect.js for what they mean.
+    this.deliveredReconnectDials = {};
     this.tls = {
       cert: fs.readFileSync(o.certPath),
       key: fs.readFileSync(o.keyPath),
@@ -91,6 +103,8 @@ export class WorkerStream {
     this.hbTimer = null;
     this.registered = false;
     this.stopped = false;
+    // whenStopped resolves once, when stop() is called (shutdown).
+    this.whenStopped = new Promise((resolve) => { this.#resolveStopped = resolve; });
 
     // Phase 7 (§1.3, P7-4): the outcome buffer. Map<job_id, {report, firstSeenMs}>. An outcome lives
     // here from the moment it is produced until the Control acks it (dropped) or it ages past the TTL
@@ -111,7 +125,10 @@ export class WorkerStream {
     // — it deliberately survives the reconnect so unacked outcomes replay on the new register_ack.
     this.registered = false;
     this.buf = "";
-    return new Promise((resolve, reject) => {
+    return new Promise((resolveStart, rejectStart) => {
+      let timer = null;
+      const resolve = (v) => { if (timer) clearTimeout(timer); resolveStart(v); };
+      const reject = (e) => { if (timer) clearTimeout(timer); rejectStart(e); };
       const onSecure = () => {
         // First frame MUST be register (§3.1).
         this.#send({
@@ -129,16 +146,26 @@ export class WorkerStream {
       sock.setEncoding("utf8");
 
       sock.on("data", (d) => this.#onData(d, resolve, reject));
-      sock.once("error", (e) => { if (!this.registered) reject(e); });
+      // `on`, not `once`: a socket can emit 'error' more than once, and an 'error' event with no listener is
+      // thrown as an uncaught exception — which would kill a worker that is meant to outlive any outage.
+      sock.on("error", (e) => { if (!this.registered) reject(e); });
       sock.once("close", () => {
         this.#stopHeartbeat();
         if (!this.registered) reject(new Error("stream closed before register"));
       });
+      timer = setTimeout(() => {
+        if (this.registered) return;
+        reject(new Error("register timed out"));
+        try { sock.destroy(); } catch { /* ignore */ }
+      }, this.registerTimeoutMs);
     });
   }
 
+  // stop is the worker's SHUTDOWN (never a failed attempt): it marks the stream stopped, resolves
+  // whenStopped (so a reconnect backoff wait ends at once, reconnect.js) and closes the socket.
   stop() {
     this.stopped = true;
+    if (this.#resolveStopped) this.#resolveStopped();
     this.#stopHeartbeat();
     if (this.sock) { try { this.sock.destroy(); } catch { /* ignore */ } }
   }
@@ -166,15 +193,28 @@ export class WorkerStream {
           if (msg.outcome_buffer_ttl_sec > 0) {
             this.outcomeBufferTtlMs = msg.outcome_buffer_ttl_sec * 1000;
           }
+          // Adopt the Control-delivered reconnect dials (worker_reconnect_* config; reconnect.js). Only a
+          // legal integer is kept: an absent, malformed or out-of-range value leaves that dial to the
+          // supervisor's fallback chain (environment override, then the built-in default). Never clamped.
+          this.deliveredReconnectDials = {};
+          for (const [wire, key] of [["reconnect_base_ms", "baseMs"], ["reconnect_cap_ms", "capMs"], ["reconnect_jitter_pct", "jitterPct"]]) {
+            if (isLegalDial(key, msg[wire])) this.deliveredReconnectDials[key] = msg[wire];
+          }
           this.#startHeartbeat();
           // REPLAY any outcomes still unacked from before this (re)connect (§1.3): a stream that just
           // came back must re-deliver what the Control never acked. Prune expired entries first.
           this.#replayBufferedOutcomes();
           if (resolve) resolve(true);
         } else {
-          // Clean reject code only (two-vocabulary); close and let start() reject.
+          // Clean reject code only (two-vocabulary); close THIS connection and let start() reject. The
+          // worker is NOT stopped: a rejection is a failed attempt like any other, and the reconnect
+          // supervisor retries it with the capped backoff for as long as the worker runs (a worker started
+          // before its send_managed.boxes row exists, or one an operator later decommissions, keeps
+          // trying quietly instead of exiting). Until the close-out this called this.stop(), which set
+          // `stopped` and made the old supervise loop exit 1 after one rejected attempt.
           if (reject) reject(new Error(`register rejected: ${msg.code || "unauthenticated"}`));
-          this.stop();
+          this.#stopHeartbeat();
+          if (this.sock) { try { this.sock.destroy(); } catch { /* ignore */ } }
         }
         break;
       case "push_job":

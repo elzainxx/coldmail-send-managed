@@ -99,7 +99,7 @@ func TestRunnerLifecycle(t *testing.T) {
 	// the migration chain — it grows as later phases add 0015+.
 	wantChain := []string{"0000", "0001", "0002", "0003", "0004", "0005", "0006", "0007",
 		"0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019",
-		"0020", "0021", "0022", "0023", "0024", "0025", "0026", "0027", "0028"}
+		"0020", "0021", "0022", "0023", "0024", "0025", "0026", "0027", "0028", "0029", "0030"}
 
 	// --- Apply ---
 	if err := r.Up(ctx); err != nil {
@@ -140,11 +140,15 @@ func TestRunnerLifecycle(t *testing.T) {
 	// Phase 4 added NO config key (§0); Phase 7, Phase 9.5, send_managed_0023, send_managed_0025 and
 	// send_managed_0026 are fully schema-neutral (config seeds only, no table).
 	// PLUS TWO at send_managed_0028 (job_max_failed_attempts, job_failed_max_age_sec — the attempt cap, M2-G2) = 59.
-	if n := configKeyCount(t, admin); n != 59 {
-		t.Fatalf("after Up: send_managed.config has %d keys, want 59 (14 foundation + 3 Phase 5 + 2 Phase 6 + 6 Phase 7 + 17 Phase 8 + 11 Phase 9.5 + 1 send_managed_0023 + 1 send_managed_0025 + 2 send_managed_0026 + 2 send_managed_0028)", n)
+	// PLUS THREE at send_managed_0029 (worker_reconnect_base_ms, worker_reconnect_cap_ms, worker_reconnect_jitter_pct — the
+	// worker never gives up reconnecting, Phase 3 close-out B1) = 62. send_managed_0030 (jobs.rendered_text, B3) adds a column, no key.
+	if n := configKeyCount(t, admin); n != 62 {
+		t.Fatalf("after Up: send_managed.config has %d keys, want 62 (14 foundation + 3 Phase 5 + 2 Phase 6 + 6 Phase 7 + 17 Phase 8 + 11 Phase 9.5 + 1 send_managed_0023 + 1 send_managed_0025 + 2 send_managed_0026 + 2 send_managed_0028 + 3 send_managed_0029)", n)
 	}
 	// send_managed_0027 / 0028 (M2-G2, M2-G3, M2-G1): the cancelled state, the attempt cap, the cancel guard.
 	assertCancelAndAttemptCapMigrations(t, admin)
+	// send_managed_0029 / 0030 (Phase 3 close-out B1, B3): the worker reconnect dials, the nullable plain-text column.
+	assertReconnectAndTextMigrations(t, admin)
 	// Phase 8 Chunk 5's seventeen content-variation config seeds — anti-vacuity that they landed
 	// (amended from fourteen, P8-OD-1 RULED-WIDEN: css_magnitude_px/zero_width_rate/user_agent_rate).
 	for _, key := range []string{
@@ -367,6 +371,28 @@ func TestRunnerLifecycle(t *testing.T) {
 			}
 			if !configKeyExists(t, admin, "dispatch_enabled") {
 				t.Fatal("after Down 0025: dispatch_enabled is GONE — 0025's down must remove exactly its own row; sweeping up the retained boolean leaves a reverted system with no dispatch kill-switch at all")
+			}
+		}
+		// 0030's down: the column and its CHECK are gone. 0029's down: exactly its three rows are gone and 0028's two
+		// neighbours (the attempt cap, seeded just before) are NOT swept up with them.
+		if v == "0030" {
+			if columnExists(t, admin, "jobs", "rendered_text") {
+				t.Fatal("after Down 0030: send_managed.jobs.rendered_text is still present (down did not drop it)")
+			}
+			if def := constraintDef(t, admin, "jobs", "jobs_rendered_text_size_check"); def != "" {
+				t.Fatalf("after Down 0030: jobs_rendered_text_size_check is still present: %s", def)
+			}
+		}
+		if v == "0029" {
+			for _, key := range []string{"worker_reconnect_base_ms", "worker_reconnect_cap_ms", "worker_reconnect_jitter_pct"} {
+				if configKeyExists(t, admin, key) {
+					t.Fatalf("after Down 0029: send_managed.config still has %q (down did not delete its seeded row)", key)
+				}
+			}
+			for _, key := range []string{"job_max_failed_attempts", "job_failed_max_age_sec", "dispatch_mode"} {
+				if !configKeyExists(t, admin, key) {
+					t.Fatalf("after Down 0029: %q is GONE — 0029's down must remove exactly its own three rows and nothing else", key)
+				}
 			}
 		}
 		// 0028's down (the attempt cap + cancel guard) and 0027's (a documented forward-only no-op). Checked

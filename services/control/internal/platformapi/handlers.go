@@ -362,6 +362,12 @@ func (s *Server) handleDescribe(w http.ResponseWriter, r *http.Request) {
 			"open_tracking":         false,
 			"click_tracking":        false,
 			"content_variation":     true,
+			// Phase 3 close-out B3, additive: the module sends a multipart/alternative message (text/plain
+			// first, text/html last) for a job whose public.job_items.rendered_text is set, and the single
+			// text/html message it always sent when it is NULL, empty or whitespace-only. The field itself is a
+			// COLUMN of the platform-owned job_items table, not an API request field, so it is advertised as a
+			// capability here rather than as a schema (describe publishes no request schemas).
+			"plain_text_alternative": true,
 		},
 		"pricing": map[string]any{
 			"currency": "credits",

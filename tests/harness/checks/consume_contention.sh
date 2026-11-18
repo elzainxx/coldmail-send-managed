@@ -64,7 +64,7 @@ $DC exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q -c "DROP
   || fail "could not create the template database (is the compose postgres up?)"
 $DC exec -T postgres psql -U postgres -d "$TPL" -v ON_ERROR_STOP=1 -q \
   -c "CREATE TABLE IF NOT EXISTS public.users(id uuid primary key default gen_random_uuid(), email text, is_active boolean default true, created_at timestamptz default now())" \
-  -c "CREATE TABLE IF NOT EXISTS public.job_items(id uuid primary key default gen_random_uuid(), campaign_id uuid, user_id uuid, recipient_email text, rendered_subject text, rendered_body text, reply_to text, status text, created_at timestamptz default now())" >/dev/null \
+  -c "CREATE TABLE IF NOT EXISTS public.job_items(id uuid primary key default gen_random_uuid(), campaign_id uuid, user_id uuid, recipient_email text, rendered_subject text, rendered_body text, rendered_text text, reply_to text, status text, created_at timestamptz default now())" >/dev/null \
   || fail "could not seed the platform fixture tables"
 MIGRATE_DATABASE_URL="postgres://postgres:${SUPER}@localhost:5432/$TPL" SEND_MANAGED_MODULE_PASSWORD="$SEND_MANAGED_MODULE_PASSWORD" \
   tools/send-managed-migrate/bin/send-managed-migrate up-and-set-password >/dev/null 2>&1 \

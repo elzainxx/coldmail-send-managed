@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS public.job_items (
     recipient_email  text,
     rendered_subject text,
     rendered_body    text,
+    rendered_text    text,
     reply_to         text,
     status           text,
     created_at       timestamptz DEFAULT now()

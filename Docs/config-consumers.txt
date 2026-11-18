@@ -87,3 +87,11 @@ retention_mode|RetentionCounts|RetentionDeletes
 # job), through attempts_cap.go's one predicate.
 job_max_failed_attempts|JobMaxFailedAttempts
 job_failed_max_age_sec|JobFailedMaxAgeSec
+# send_managed_0029 — the worker reconnect dials (Phase 3 close-out B1). The worker has NO database, so the
+# consumer in THIS tree's Go is the read that DELIVERS each dial to it on register_ack
+# (internal/workerlink/stream.go readReconnectDials: read("<key>", ...)); the worker (src/stream.js, src/reconnect.js)
+# adopts the delivered value for every backoff wait. The pattern names the read call, so a comment or a mere mention
+# of the key does not satisfy it.
+worker_reconnect_base_ms|read\("worker_reconnect_base_ms"
+worker_reconnect_cap_ms|read\("worker_reconnect_cap_ms"
+worker_reconnect_jitter_pct|read\("worker_reconnect_jitter_pct"

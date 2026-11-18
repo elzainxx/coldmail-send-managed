@@ -8,7 +8,7 @@
 #   3. worker<->Control mTLS register/heartbeat + wrong-token negative control (live Control)
 #   4. two-Control singleton        (real 2nd Control process exits, no double-lock)
 #   5. worker-CANNOT-read-KMS        (the worker container cannot read the Control's KMS key)
-#  (…then the Go packages and the live suites 6-11: see the SUITE headers below; SUITE 11 is POST /v1/cancel)
+#  (…then the Go packages and the live suites 6-13: see the SUITE headers below; SUITE 11 is POST /v1/cancel, 12 the plain-text part, 13 the worker outage)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -56,7 +56,7 @@ $DC exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q \
   -c "DROP DATABASE IF EXISTS send_managed_migtest" -c "CREATE DATABASE send_managed_migtest" >/dev/null 2>&1 || true
 $DC exec -T postgres psql -U postgres -d send_managed_migtest -v ON_ERROR_STOP=1 -q \
   -c "CREATE TABLE IF NOT EXISTS public.users(id uuid primary key default gen_random_uuid(), email text, is_active boolean default true, created_at timestamptz default now())" \
-  -c "CREATE TABLE IF NOT EXISTS public.job_items(id uuid primary key default gen_random_uuid(), campaign_id uuid, user_id uuid, recipient_email text, rendered_subject text, rendered_body text, reply_to text, status text, created_at timestamptz default now())" >/dev/null 2>&1
+  -c "CREATE TABLE IF NOT EXISTS public.job_items(id uuid primary key default gen_random_uuid(), campaign_id uuid, user_id uuid, recipient_email text, rendered_subject text, rendered_body text, rendered_text text, reply_to text, status text, created_at timestamptz default now())" >/dev/null 2>&1
 export TEST_DATABASE_URL="postgres://postgres:${SUPER}@localhost:5432/send_managed_migtest"
 
 # Worker token for the live mTLS test (from .env, written by scripts/dev.sh certs).
@@ -85,7 +85,7 @@ $DC exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q \
 TPL_DSN="postgres://postgres:${SUPER}@localhost:5432/send_managed_template"
 $DC exec -T postgres psql -U postgres -d send_managed_template -v ON_ERROR_STOP=1 -q \
   -c "CREATE TABLE IF NOT EXISTS public.users(id uuid primary key default gen_random_uuid(), email text, is_active boolean default true, created_at timestamptz default now())" \
-  -c "CREATE TABLE IF NOT EXISTS public.job_items(id uuid primary key default gen_random_uuid(), campaign_id uuid, user_id uuid, recipient_email text, rendered_subject text, rendered_body text, reply_to text, status text, created_at timestamptz default now())" >/dev/null 2>&1
+  -c "CREATE TABLE IF NOT EXISTS public.job_items(id uuid primary key default gen_random_uuid(), campaign_id uuid, user_id uuid, recipient_email text, rendered_subject text, rendered_body text, rendered_text text, reply_to text, status text, created_at timestamptz default now())" >/dev/null 2>&1
 # up-and-set-password: apply the full chain AND set send_managed_app's password out-of-band, so
 # the Phase 1 role-isolation tests (T5/T6/T3e) can connect as send_managed_app against clones.
 if MIGRATE_DATABASE_URL="$TPL_DSN" SEND_MANAGED_MODULE_PASSWORD="${SEND_MANAGED_MODULE_PASSWORD:-devmodulepass}" \
@@ -263,7 +263,12 @@ go_suite services/control/internal/httpapi "root-mux coded 404 + log-forgery neu
 # Standing rule from this finding: a test that EXISTS is not a test that RUNS. When adding either a
 # test package or a CI gate, verify the wiring — ideally by breaking it once and watching red.
 go_suite services/control/internal/workerlink  "workerlink stream in-flight accounting (2 tests)"
-go_suite services/control/internal/workerproto "variation wire-format round-trip (1 test)"
+go_suite services/control/internal/workerproto "worker wire format: variation round-trip, reconnect dials on register_ack, the optional text part, Go/Node dial ranges pinned equal (4 tests, no DB)"
+
+# Phase 3 close-out B2 — the one cursor codec every paginated route uses (Domain A campaign report; Domain B
+# accounts / pools / account events). Pure: no database, no stack. The ROUTE tests (a forged cursor is a 400 on
+# every route, a genuine one still pages to the end) run in the platformapi and adminapi suites below.
+go_suite services/control/internal/pagecursor  "page cursor codec: forged values are malformed, another scope is refused, a genuine cursor round-trips (pure, no DB)"
 
 # N1/D12 — the DSN scrub. Needs NO database and no stack: every DSN in it is rejected at the pgx
 # PARSE stage (before a socket opens) or points at 127.0.0.1:1, so it is listed here with the other
@@ -284,7 +289,7 @@ $DC exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q \
 P2_DSN="postgres://postgres:${SUPER}@localhost:5432/send_managed_template_p2"
 $DC exec -T postgres psql -U postgres -d send_managed_template_p2 -v ON_ERROR_STOP=1 -q \
   -c "CREATE TABLE IF NOT EXISTS public.users(id uuid primary key default gen_random_uuid(), email text, is_active boolean default true, created_at timestamptz default now())" \
-  -c "CREATE TABLE IF NOT EXISTS public.job_items(id uuid primary key default gen_random_uuid(), campaign_id uuid, user_id uuid, recipient_email text, rendered_subject text, rendered_body text, reply_to text, status text, created_at timestamptz default now())" >/dev/null 2>&1
+  -c "CREATE TABLE IF NOT EXISTS public.job_items(id uuid primary key default gen_random_uuid(), campaign_id uuid, user_id uuid, recipient_email text, rendered_subject text, rendered_body text, rendered_text text, reply_to text, status text, created_at timestamptz default now())" >/dev/null 2>&1
 if MIGRATE_DATABASE_URL="$P2_DSN" SEND_MANAGED_MODULE_PASSWORD="${SEND_MANAGED_MODULE_PASSWORD:-devmodulepass}" \
      tools/send-managed-migrate/bin/send-managed-migrate up-and-set-password >/dev/null 2>&1; then
   export TEST_TEMPLATE_DB="send_managed_template_p2"; echo "  Phase 2 template ready (migrated 0000..0014 + app password)"
@@ -420,7 +425,7 @@ $DC exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q \
 P3_DSN="postgres://postgres:${SUPER}@localhost:5432/send_managed_template_p3"
 $DC exec -T postgres psql -U postgres -d send_managed_template_p3 -v ON_ERROR_STOP=1 -q \
   -c "CREATE TABLE IF NOT EXISTS public.users(id uuid primary key default gen_random_uuid(), email text, is_active boolean default true, created_at timestamptz default now())" \
-  -c "CREATE TABLE IF NOT EXISTS public.job_items(id uuid primary key default gen_random_uuid(), campaign_id uuid, user_id uuid, recipient_email text, rendered_subject text, rendered_body text, reply_to text, status text, created_at timestamptz default now())" >/dev/null 2>&1
+  -c "CREATE TABLE IF NOT EXISTS public.job_items(id uuid primary key default gen_random_uuid(), campaign_id uuid, user_id uuid, recipient_email text, rendered_subject text, rendered_body text, rendered_text text, reply_to text, status text, created_at timestamptz default now())" >/dev/null 2>&1
 if MIGRATE_DATABASE_URL="$P3_DSN" SEND_MANAGED_MODULE_PASSWORD="${SEND_MANAGED_MODULE_PASSWORD:-devmodulepass}" \
      tools/send-managed-migrate/bin/send-managed-migrate up-and-set-password >/dev/null 2>&1; then
   export TEST_TEMPLATE_DB="send_managed_template_p3"; echo "  Phase 3 template ready"
@@ -454,6 +459,19 @@ hr; echo "SUITE 11: POST /v1/cancel — LIVE (real worker + real Mailpit; the si
 # is an empty 200. Sourced so it shares PASS/FAIL/ok/bad + $DC/$PSQL/$PLTOK and phase3's pool/account fixtures.
 # shellcheck disable=SC1091
 source tests/harness/phase11_cancel.sh
+
+hr; echo "SUITE 12: the optional PLAIN-TEXT PART — LIVE (real worker + real Mailpit; the message the SMTP server RECEIVED is read back)"; hr
+# Phase 3 close-out B3. public.job_items.rendered_text -> POST /v1/run -> send_managed.jobs.rendered_text -> push_job.send.text ->
+# the worker's MIME assembly -> Mailpit. NULL and whitespace-only give today's single-part text/html message; a real text gives
+# multipart/alternative with the text/plain part FIRST. Each present-case assertion has its absent-case twin in the same run.
+# shellcheck disable=SC1091
+source tests/harness/phase12_text_part.sh
+
+hr; echo "SUITE 13: THE WORKER NEVER GIVES UP — LIVE (the Control is stopped for more than 30 reconnect attempts, then started)"; hr
+# Phase 3 close-out B1. Small dials delivered by the Control on register_ack make >30 attempts take seconds; the worker must still be
+# running with the SAME container start afterwards, re-register by itself and send. Runs LAST: it stops and restarts the Control.
+# shellcheck disable=SC1091
+source tests/harness/phase13_reconnect.sh
 
 hr
 echo "HARNESS RESULT: $PASS passed, $FAIL failed"

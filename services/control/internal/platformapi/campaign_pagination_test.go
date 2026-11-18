@@ -283,7 +283,7 @@ func TestCampaignReport_PaginationControl_TheOldCursorIsCaughtBySameChecker(t *t
 			if extra >= len(items) {
 				return "" // no extra row existed, so the old code returned next_cursor = null
 			}
-			c := encodeReportCursor(items[extra].createdAt.Format(time.RFC3339Nano), items[extra].id)
+			c := encodeReportCursor(user, campaign, items[extra].createdAt.Format(time.RFC3339Nano), items[extra].id)
 			start = extra + 1 // the next page begins STRICTLY AFTER the cursor row: the extra row is never served
 			return c
 		}

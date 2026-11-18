@@ -32,7 +32,7 @@ SET state = 'assigned',
     lease_expires_at = NOW() + make_interval(secs => $3),
     updated_at = NOW()
 WHERE id IN (SELECT id FROM claimed)
-RETURNING id, user_id, campaign_id, recipient_email, rendered_subject, rendered_body, reply_to`
+RETURNING id, user_id, campaign_id, recipient_email, rendered_subject, rendered_body, rendered_text, reply_to`
 
 // ringSlot is one active user's turn this tick: how many lanes they may claim.
 type ringSlot struct {
@@ -306,7 +306,7 @@ func (d *Dispatcher) claimForUser(ctx context.Context, userID string, grant, job
 	var jobs []claimedJob
 	for rows.Next() {
 		var j claimedJob
-		if err := rows.Scan(&j.id, &j.userID, &j.campaignID, &j.recipient, &j.subject, &j.body, &j.replyTo); err != nil {
+		if err := rows.Scan(&j.id, &j.userID, &j.campaignID, &j.recipient, &j.subject, &j.body, &j.text, &j.replyTo); err != nil {
 			return nil, err
 		}
 		jobs = append(jobs, j)

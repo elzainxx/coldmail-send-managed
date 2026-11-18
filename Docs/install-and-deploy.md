@@ -408,10 +408,15 @@ configuration.
 
 Confirm registration in the Control's log: `worker registered id="<id>"`.
 
-If the worker exits instead: it has a **bounded** register-retry budget and deliberately exits for the
-supervisor to restart rather than hammering a Control that is not ready. A worker that exits during
-first-time setup usually means the Control was not up yet, or the `send_managed.boxes` row was not seeded.
-See the runbook.
+If the log instead shows `control unreachable or register refused (...)`: the worker **never gives up**. It
+keeps retrying, for ever, with a capped exponential backoff plus jitter (first wait `worker_reconnect_base_ms`,
+default 1 s, doubling to `worker_reconnect_cap_ms`, default 30 s; logged at the first failed attempt and then every
+10th), so a Control that is not up yet, or a `send_managed.boxes` row that is not seeded yet, is simply waited out and the
+worker registers as soon as it can — nothing needs restarting. (Before the Phase 3 close-out it made about thirty
+one-second attempts and then exited 1; that limit is gone.) A refused register
+(`register rejected: unauthenticated`) is retried the same way, so a worker started before its row exists
+recovers once the row is seeded; seeding first is still the clean order. The worker exits only on SIGTERM/SIGINT.
+See `Docs/config-reference.md` (the `worker_reconnect_*` dials) and the runbook.
 
 ### Step 9 — Create a pool, add an account, set the default pool
 
@@ -747,8 +752,9 @@ WorkingDirectory=/opt/coldmail-send-managed
 EnvironmentFile=/etc/send_managed/worker.env
 ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml up worker
 ExecStop=/usr/bin/docker compose -f docker-compose.prod.yml stop -t 60 worker
-# A worker EXITS on purpose when it cannot register within its retry budget.
-# Restart=always is correct: the supervisor is the retry mechanism.
+# The worker never exits on its own because the Control is unreachable or refuses it: it retries for ever
+# with a capped backoff (Docs/config-reference.md, worker_reconnect_*). Restart=always still restarts it after a
+# crash or a host reboot; it is no longer the retry mechanism for an outage.
 Restart=always
 RestartSec=10
 TimeoutStopSec=90
@@ -995,7 +1001,7 @@ Read these first; they will each cost you an hour otherwise.
 
 - **Host antivirus intercepts host→localhost TLS.** This is a known environment quirk, not a defect. mTLS must be probed **in-network** (container-to-container), not from the Windows host. If an mTLS check fails from the host, re-run it from inside a container before believing it.
 - **`dev.sh reset` means reset.** Clean-slate tests need a genuinely fresh volume — a stale volume will silently skip migrations and give you a false pass on Stage 2.
-- **A reset drops the worker rows, and `--wait` will lie to you about it.** `reset` is `down -v`, which destroys the volume holding `send_managed.boxes` — so a worker has nothing to authorize against, is refused with `unauthenticated`, burns its retry budget and **exits 1**. `up --wait` reports it *healthy* seconds before it dies, so a scripted run sees a green light on a dead worker. `reset` now re-seeds the worker rows itself (postgres → migrate → seed → the rest); if you drive compose by hand, run `scripts/dev.sh seed` after migrations and before the worker. Always confirm with `docker compose ps -a` (**`-a`** — a plain `ps` hides an exited container).
+- **A reset drops the worker rows, and `--wait` will lie to you about it.** `reset` is `down -v`, which destroys the volume holding `send_managed.boxes` — so a worker has nothing to authorize against, is refused with `unauthenticated`. Since the Phase 3 close-out the worker **keeps retrying** (capped backoff, it no longer exits) and registers by itself once the row is seeded; before that it burned a ~30-attempt retry budget and **exited 1**, and `up --wait` reported it *healthy* seconds before it died. The CI step that starts the stack still requires zero `register rejected: unauthenticated` lines, so the seeded ORDER stays the property under test. `reset` now re-seeds the worker rows itself (postgres → migrate → seed → the rest); if you drive compose by hand, run `scripts/dev.sh seed` after migrations and before the worker. Always confirm with `docker compose ps -a` (**`-a`** — a plain `ps` hides an exited container).
 - **Dev and CI use the same compose, EXCEPT for one opt-in.** CI sets `DEV_RAM_PG=1` (base + harness override: Postgres on a RAM `tmpfs` with `fsync=off`, fast); by default `scripts/dev.sh` runs the **base file alone**, where Postgres' data lives in a volume that should survive `docker stop`/`start` and a compose recreate (drilled on this stack too, 2026-11-08, on a GitHub runner: `tests/harness/drills/postgres_outage.sh`, 22 passed — see `future-work.md`). If something passes locally but fails in CI, suspect the override, not the code — and suspect the *mode*: a stop/start drill is only meaningful in the default mode. (This was module 3's #131, ported here; before it, the override was merged unconditionally and an outage drill on the default stack silently destroyed the database and read as a recovery bug.)
 - **Always drive compose through `scripts/dev.sh` (or `scripts/dev.sh compose`, which prints the exact invocation for the current mode) — and never restart postgres mid-stage under `DEV_RAM_PG=1`.** Two separate traps with the same symptom (your fixtures silently vanish, and `migrate` logs `applied 22 migration(s)` on what you thought was a warm database):
   - With `DEV_RAM_PG=1` the harness override backs postgres's data directory with **`tmpfs`** (RAM). It is not a volume — the data does not survive the container being recreated *at all*, and there is nothing to inspect afterwards. In the default mode this trap does not exist.

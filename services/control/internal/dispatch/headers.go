@@ -89,3 +89,17 @@ func validateNoInjection(fromName, fromAddress, recipient, subject, replyTo stri
 	}
 	return ""
 }
+
+// sendText is the plain-text alternative that goes on the wire (workerproto.Send.Text) for a claimed job:
+// the job's rendered_text (frozen at run from the platform's public.job_items.rendered_text), or "" when the
+// message has none. NULL, the empty string and a string with no non-whitespace character are ONE meaning,
+// "no text part" (Phase 3 close-out B3: a new field cannot be ambiguous), and "" is omitted from the frame
+// (`text,omitempty`), so such a message is built by the worker exactly as it always was, byte for byte.
+// Anything else is returned VERBATIM: no trimming, no re-wrapping, no normalisation here (the worker owns the
+// MIME rendering). services/worker/src/assemble.js textPartOf applies the same rule on its side.
+func sendText(rendered *string) string {
+	if rendered == nil || strings.TrimSpace(*rendered) == "" {
+		return ""
+	}
+	return *rendered
+}

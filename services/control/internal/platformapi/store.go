@@ -80,11 +80,10 @@ func (s *Server) createJob(ctx context.Context, jobItemID, userID string) (jobID
 		return "", false, newErr(codeConflict, "user_campaign_active")
 	}
 
-	// Freeze the denormalized copy from public.job_items into send_managed.jobs (Phase 1 shape; rendered_text,
-	// the optional plain-text alternative, added by Phase 3 close-out B3), but ONLY
-	// if the job_item belongs to the calling tenant (`ji.user_id = $2`). A cross-tenant job_item
-	// matches 0 rows → job_item_not_found (404-style), identical to a non-existent job_item — the
-	// module never confirms another tenant's job_item exists.
+	// Freeze the denormalized copy from public.job_items into send_managed.jobs (Phase 1 shape; rendered_text, the
+	// optional plain-text alternative, since Phase 3 close-out B3), but ONLY if the job_item belongs to the calling
+	// tenant (`ji.user_id = $2`). A cross-tenant job_item matches 0 rows → job_item_not_found (404-style), identical
+	// to a non-existent job_item — the module never confirms another tenant's job_item exists.
 	err = tx.QueryRow(ctx,
 		`INSERT INTO send_managed.jobs
 		   (job_item_id, campaign_id, user_id, recipient_email, rendered_subject, rendered_body, rendered_text, reply_to, state, next_attempt_at)

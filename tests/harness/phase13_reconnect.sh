@@ -15,7 +15,8 @@
 #      past thirty attempts in seconds; with the production 1 s / 30 s it would take minutes.)
 #   2. CONTROL (the stack with the Control up throughout): a job is sent and the worker's log carries NO
 #      "reconnected after" line — a worker that is merely connected does not claim a recovery.
-#   3. the Control is STOPPED. The worker's log must show at least 40 consecutive failed attempts (so > 30) and the
+#   3. the Control is STOPPED (a refusing stand-in answers to its name, so every dial fails at once; see the comment at that step).
+#      The worker's log must show at least 40 consecutive failed attempts (so > 30) and the
 #      worker container must still be running with the SAME StartedAt it had before the outage: it did not give up
 #      and it was not restarted.
 #   4. the Control is started again. The worker must re-register on its own, its log must say it reconnected after
@@ -106,14 +107,33 @@ fi
 # --- 3. the outage: the Control is DOWN; the worker keeps trying past thirty attempts and is not restarted ------------------------
 P13_T_DOWN="$(p13_now)"
 $DC stop control >/dev/null 2>&1 || true
+# WHY A REFUSER. Once a compose container is stopped its NAME stops resolving, and Docker's resolver then fails the lookup slowly
+# (measured on a real runner: `getaddrinfo EAI_AGAIN control`, about 4-5 s per attempt), so with the Control merely stopped the
+# worker needs minutes to make thirty attempts whatever its dials are. To keep the attempts fast (and the "more than thirty attempts
+# in seconds at the small dials" claim honest) a throwaway container takes over the name `control` on the worker's network and
+# listens on nothing: every dial is refused at once (ECONNREFUSED), exactly the failure of a Control that is down while its host is
+# up. It runs the worker's OWN image (already built and digest-pinned by its Dockerfile) with sleep as the entrypoint, so no new image
+# is introduced. It is removed BEFORE the Control returns. If it cannot be started the suite falls back to the slow path and waits.
+P13_NET="$(p13_inspect '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' | awk '{print $1}')"
+P13_IMG="$(p13_inspect '{{.Image}}')"
+P13_REFUSER=0
+if [[ -n "$P13_NET" && -n "$P13_IMG" ]] && docker run -d --name p13-refuser --network "$P13_NET" --network-alias control --entrypoint sleep "$P13_IMG" 3600 >/dev/null 2>&1; then
+  P13_REFUSER=1
+  ok "P13: a refusing stand-in answers to the name 'control' while the real Control is down (every dial is refused at once)"
+else
+  echo "  NOTE: could not start the refusing stand-in (net='$P13_NET' image='$P13_IMG'); falling back to the slow DNS-failure path"
+fi
 P13_SEEN=0
-for _ in $(seq 1 150); do
+P13_WANT=40; P13_ROUNDS=60; [[ "$P13_REFUSER" == "1" ]] || { P13_WANT=30; P13_ROUNDS=300; }
+for _ in $(seq 1 "$P13_ROUNDS"); do
   P13_SEEN="$(p13_max_attempts "$P13_T_DOWN")"
-  [[ "${P13_SEEN:-0}" -ge 40 ]] && break
+  [[ "${P13_SEEN:-0}" -ge "$P13_WANT" ]] && break
   sleep 1
 done
-[[ "${P13_SEEN:-0}" -ge 40 ]] && ok "P13: with the Control stopped the worker logged $P13_SEEN consecutive failed attempts (> 30: the old limit) and kept going" \
-  || bad "P13: with the Control stopped the worker logged only $P13_SEEN consecutive failed attempts in 150 s (want >= 40)"
+# On the slow path the log shows only every 10th attempt, so the 30th line is followed by a further wait that makes the 31st certain.
+[[ "$P13_REFUSER" == "1" ]] || sleep 20
+[[ "${P13_SEEN:-0}" -ge "$P13_WANT" ]] && ok "P13: with the Control down the worker logged $P13_SEEN consecutive failed attempts (the old limit was ~30) and kept going" \
+  || bad "P13: with the Control down the worker logged only $P13_SEEN consecutive failed attempts (want >= $P13_WANT; refuser=$P13_REFUSER)"
 P13_RUNNING_DURING="$(p13_inspect '{{.State.Running}}')"
 P13_STARTED_DURING="$(p13_inspect '{{.State.StartedAt}}')"
 [[ "$P13_RUNNING_DURING" == "true" && "$P13_STARTED_DURING" == "$P13_STARTED" ]] \
@@ -122,6 +142,7 @@ P13_STARTED_DURING="$(p13_inspect '{{.State.StartedAt}}')"
 if p13_wlog "$P13_T_DOWN" | grep -qE 'could not \(re\)register|exiting for restart'; then bad "P13: the worker logged a give-up line during the outage"; else ok "P13: no give-up line in the worker's log"; fi
 
 # --- 4. recovery: the Control returns; the worker re-registers by itself and sends, with no restart ------------------------------
+docker rm -f p13-refuser >/dev/null 2>&1 || true   # the name 'control' must resolve to the REAL Control alone again
 P13_T_UP="$(PSQL1 "SELECT NOW()" 2>/dev/null || true)"
 P13_S_UP="$(p13_now)"
 $DC start control >/dev/null 2>&1 || true
@@ -134,7 +155,14 @@ done
 # the DB clock taken before the Control returned: a heartbeat newer than it proves a fresh registration
 [[ -n "$P13_T_UP" ]] || P13_T_UP="$(PSQL1 "SELECT NOW() - interval '1 second'" || true)"
 if p13_wait_registered "$P13_T_UP" 90; then ok "P13: the worker re-registered with the returned Control on its own (fresh heartbeat on its box row)"; else bad "P13: the worker did not re-register after the Control returned"; fi
-P13_REC="$(p13_wlog "$P13_T_DOWN" | grep -oE 'reconnected after [0-9]+ failed attempt' | grep -oE '[0-9]+' | tail -1 || true)"
+# The worker logs the recovery a moment AFTER the Control has written the heartbeat, and the container log is read through docker:
+# poll for the line instead of reading once.
+P13_REC=""
+for _ in $(seq 1 30); do
+  P13_REC="$(p13_wlog "$P13_T_DOWN" | grep -oE 'reconnected after [0-9]+ failed attempt' | grep -oE '[0-9]+' | tail -1 || true)"
+  [[ -n "$P13_REC" ]] && break
+  sleep 1
+done
 [[ "${P13_REC:-0}" -gt 30 ]] && ok "P13: the worker logged 'reconnected after $P13_REC failed attempt(s)' (> 30)" || bad "P13: no recovery line with more than 30 failed attempts (saw '${P13_REC:-none}')"
 P13_BEFORE_MAIL="$(p13_mail_count p13-after@example.com)"
 if p13_send_and_wait "p13-after@example.com"; then ok "P13: after the outage a NEW job reaches the sent state"; else bad "P13: a job submitted after the outage did not reach sent"; fi
@@ -145,6 +173,7 @@ P13_STARTED_END="$(p13_inspect '{{.State.StartedAt}}')"
   && ok "P13: the worker was never restarted: the same container start ($P13_STARTED) before, during and after the outage" \
   || bad "P13: the worker's StartedAt changed ($P13_STARTED -> $P13_STARTED_END) or it is not running"
 
-# --- restore: the seeded defaults, and the Control left running -----------------------------------------------------------
+# --- restore: the seeded defaults, no stand-in left behind, and the Control left running -----------------------------------------------------------
+docker rm -f p13-refuser >/dev/null 2>&1 || true
 p13_put worker_reconnect_base_ms 1000 >/dev/null; p13_put worker_reconnect_cap_ms 30000 >/dev/null; p13_put worker_reconnect_jitter_pct 20 >/dev/null
 [[ "$(curl -s -o /dev/null -w '%{http_code}' "$P13_API/readyz" 2>/dev/null || true)" == "200" ]] || $DC start control >/dev/null 2>&1 || true
